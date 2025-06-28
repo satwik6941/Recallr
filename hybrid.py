@@ -3,8 +3,9 @@ from llama_index.core import (
     SimpleKeywordTableIndex,
     SimpleDirectoryReader,
     Settings,
+    StorageContext,
+    load_index_from_storage
 )
-from llama_index.core.agent.workflow import AgentWorkflow
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import BaseRetriever
@@ -33,34 +34,61 @@ Settings.llm = Groq(
     request_timeout=360.0,
 )
 
-print("Loading documents...")
+# Try to load existing storage, otherwise create new indexes
+storage_dir = "storage"
 try:
+    print("Trying to load existing indexes from storage...")
+    storage_context = StorageContext.from_defaults(persist_dir=storage_dir)
+    vector_index = load_index_from_storage(storage_context, index_id="vector")
+    keyword_index = load_index_from_storage(storage_context, index_id="keyword")
+    print("Loaded existing indexes from storage.")
+    
+    # Still need to load documents for BM25 (not stored)
     documents = SimpleDirectoryReader("data").load_data()
-    print(f"Loaded {len(documents)} documents.")
+    parser = SimpleNodeParser.from_defaults(
+        chunk_size=1000,
+        chunk_overlap=200,
+    )
+    nodes = parser.get_nodes_from_documents(documents)
+    
 except Exception as e:
-    print(f"Error loading documents: {e}")
-    raise
+    print(f"Could not load from storage ({e}), creating new indexes...")
+    
+    print("Loading documents...")
+    try:
+        documents = SimpleDirectoryReader("data").load_data()
+        print(f"Loaded {len(documents)} documents.")
+    except Exception as e:
+        print(f"Error loading documents: {e}")
+        raise
 
-# Parse documents into nodes for BM25 with proper chunking
-print("Parsing documents into nodes with chunking...")
-parser = SimpleNodeParser.from_defaults(
-    chunk_size=1000,  # Smaller chunks for better retrieval
-    chunk_overlap=200,  # Some overlap to maintain context
-)
-nodes = parser.get_nodes_from_documents(documents)
+    # Parse documents into nodes for BM25 with proper chunking
+    print("Parsing documents into nodes with chunking...")
+    parser = SimpleNodeParser.from_defaults(
+        chunk_size=1000,  # Smaller chunks for better retrieval
+        chunk_overlap=200,  # Some overlap to maintain context
+    )
+    nodes = parser.get_nodes_from_documents(documents)
 
-print("Creating indexes...")
-# Create vector store index from nodes (with chunking)
-vector_index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
-
-# Create keyword table index from nodes
-keyword_index = SimpleKeywordTableIndex(nodes)
+    print("Creating indexes...")
+    # Create vector store index from nodes (with chunking)
+    vector_index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
+    
+    # Create keyword table index from nodes
+    keyword_index = SimpleKeywordTableIndex(nodes)
+    
+    # Save indexes to storage
+    print("Saving indexes to storage...")
+    vector_index.set_index_id("vector")
+    keyword_index.set_index_id("keyword")
+    vector_index.storage_context.persist(persist_dir=storage_dir)
+    keyword_index.storage_context.persist(persist_dir=storage_dir)
 
 print("Creating retrievers...")
 # Create retrievers with smaller top_k to reduce context size
-vector_retriever = vector_index.as_retriever(similarity_top_k=5)
-keyword_retriever = keyword_index.as_retriever(similarity_top_k=5)
-bm25_retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=5)
+vector_retriever = vector_index.as_retriever(similarity_top_k=3)
+keyword_retriever = keyword_index.as_retriever(similarity_top_k=3)
+bm25_retriever = BM25Retriever.from_defaults(nodes=nodes, similarity_top_k=3)
 
 # Define a custom hybrid retriever class
 class HybridRetriever(BaseRetriever):
@@ -105,8 +133,11 @@ hybrid_query_engine = RetrieverQueryEngine.from_args(
 
 print("Creating query engine...")
 
-async def search_documents(query: str) -> str:
-    """Search through documents using hybrid retrieval (vector + keyword + BM25)
+# Conversation context to maintain chat history
+conversation_history = []
+
+async def search_documents_with_context(query: str) -> str:
+    """Search through documents using hybrid retrieval with conversation context
     
     Args:
         query (str): The search query to find relevant documents
@@ -115,14 +146,40 @@ async def search_documents(query: str) -> str:
         str: The response from the document search
     """
     try:
-        response = await hybrid_query_engine.aquery(query)
+        # Build context-aware query
+        if conversation_history:
+            # Include recent conversation history for context
+            recent_history = conversation_history[-4:]  # Last 4 exchanges
+            context_prompt = f"""
+Previous conversation:
+{chr(10).join([f"User: {h['user']}" + chr(10) + f"Assistant: {h['assistant']}" for h in recent_history])}
+
+Current question: {query}
+
+Please answer the current question, considering the conversation context above.
+"""
+        else:
+            context_prompt = query
+            
+        response = await hybrid_query_engine.aquery(context_prompt)
+        
+        # Add to conversation history
+        conversation_history.append({
+            "user": query,
+            "assistant": str(response)
+        })
+        
+        # Keep only last 10 exchanges to prevent context overflow
+        if len(conversation_history) > 10:
+            conversation_history.pop(0)
+            
         return str(response)
     except Exception as e:
         return f"Error searching documents: {str(e)}"
 
 async def main():
-    """Main function to run the agent"""
     print("Document search ready! You can ask questions about documents.")
+    print("The system will remember our conversation context.")
     
     while True:
         try:
@@ -132,8 +189,8 @@ async def main():
                 
             print("Processing...")
             
-            # Use direct search to avoid workflow errors
-            result = await search_documents(user_query)
+            # Use direct search with context
+            result = await search_documents_with_context(user_query)
             print(f"\nResponse: {result}")
             
         except KeyboardInterrupt:
