@@ -19,6 +19,7 @@ import asyncio
 import requests
 import os
 import re
+from typing import List, Dict, Any
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,6 +29,11 @@ if not os.getenv("GROQ_API_KEY"):
     raise ValueError("GROQ_API_KEY environment variable is required")
 if not os.getenv("GEMINI_API_KEY"):
     raise ValueError("GEMINI_API_KEY environment variable is required")
+
+# YouTube API key is optional - will gracefully handle if missing
+youtube_api_key = os.getenv("YOUTUBE_API_KEY")
+if not youtube_api_key:
+    print("Warning: YOUTUBE_API_KEY not found. YouTube search functionality will be limited.")
 
 # Settings control global defaults
 Settings.embed_model = HuggingFaceEmbedding(
@@ -196,6 +202,32 @@ def google_search(query: str) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
+# YouTube integration - using external youtube.py module
+        return []
+
+async def youtube_search_tool_function(query: str) -> str:
+    """Search YouTube for educational videos using external youtube.py module"""
+    try:
+        # Import the youtube module functions
+        import sys
+        import os
+        sys.path.append(os.path.dirname(__file__))
+        
+        from youtube import process_youtube_query
+        
+        # Process the query using the external module
+        result = await process_youtube_query(query)
+        
+        return result
+        
+    except ImportError as e:
+        return f"Error importing YouTube module: {str(e)}"
+    except Exception as e:
+        return f"Error searching YouTube: {str(e)}"
+        
+    except Exception as e:
+        return f"Error searching YouTube: {str(e)}"
+
 # Create FunctionTool objects
 google_search_tool = FunctionTool.from_defaults(
     fn=google_search,
@@ -203,25 +235,34 @@ google_search_tool = FunctionTool.from_defaults(
     description="Search the web using Google Custom Search API. Use this for current events, general knowledge, or web search queries."
 )
 
+youtube_search_tool = FunctionTool.from_defaults(
+    fn=youtube_search_tool_function,
+    name="youtube_search",
+    description="Search for educational YouTube videos and tutorials on any topic. Use this when users want video content, visual explanations, or tutorials."
+)
+
 # Create ReActAgent with improved system prompt and settings
 agent = ReActAgent.from_tools(
-    [google_search_tool],
+    [google_search_tool, youtube_search_tool],
     llm=groq_llm,
     verbose=True,
     max_iterations=3,  # Limit iterations to prevent infinite loops
-    system_prompt="""You are a helpful AI assistant. You have access to a google search tool.
+    system_prompt="""You are a helpful AI assistant for students. You have access to these tools:
+1. google_search - Search the web for general information, facts, and current events
+2. youtube_search - Search for educational YouTube videos and tutorials
 
 When responding, you must follow this exact format:
 
 Thought: I need to search for information about [topic].
-Action: google_search
+Action: [tool_name]
 Action Input: [your search query]
 
-After getting the search results, provide a final answer based on the information found.
 For each user query:
 - Analyze what the user is asking for
-- Search the web using the google_search tool always when the user asks for information.
-- Return the results in a clear,simple and concise manner
+- Choose the appropriate tool:
+  * Use google_search for text-based information, definitions, facts, current events
+  * Use youtube_search when users want video content, tutorials, or visual explanations
+- Return the results in a clear, simple and concise manner
 - Always provide helpful and detailed responses
 
 Always be conversational and helpful and be clear, concise, and helpful in your responses."""
@@ -283,10 +324,81 @@ Please provide a clear, concise answer based on the search results."""
     except Exception as e:
         return f"Error getting web search results: {str(e)}"
 
-async def synthesize_final_answer(query: str, rag_result: str, web_result: str) -> str:
-    """Synthesize final answer from RAG and web search results"""
+async def get_youtube_search_results(query: str) -> str:
+    """Get YouTube search results using external youtube.py module
+    
+    Args:
+        query (str): The search query
+        
+    Returns:
+        str: Processed YouTube search results
+    """
     try:
-        synthesis_prompt = f"""
+        print(f"🎥 Calling external YouTube module...")
+        
+        # Import and use the external youtube module
+        import sys
+        import os
+        sys.path.append(os.path.dirname(__file__))
+        
+        from youtube import process_youtube_query
+        
+        # Get YouTube search results from external module
+        youtube_results = await process_youtube_query(query)
+        
+        # Check if we got results
+        if "No YouTube videos found" in youtube_results or "Error" in youtube_results:
+            return youtube_results
+        
+        # Use Groq LLM to process and summarize the results
+        process_prompt = f"""Based on these YouTube search results, provide a summary of the available educational videos for the query '{query}':
+
+{youtube_results}
+
+Please provide a clear summary highlighting the most relevant videos for learning, and recommend the top 3 videos."""
+        
+        groq_response = await groq_llm.acomplete(process_prompt)
+        
+        # Combine original results with AI summary
+        final_result = f"{youtube_results}\n\n**AI Summary:**\n{str(groq_response)}"
+        
+        return final_result
+        
+    except Exception as e:
+        return f"Error getting YouTube search results: {str(e)}"
+
+async def synthesize_final_answer(query: str, rag_result: str, web_result: str, youtube_result: str = None) -> str:
+    """Synthesize final answer from RAG, web search, and YouTube results"""
+    try:
+        if youtube_result:
+            synthesis_prompt = f"""
+You are an expert and helpful AI assistant in helping students understanding concepts. I have three sources of information to answer the user's query: "{query}"
+
+Source 1 - Document Search (RAG):
+{rag_result}
+
+Source 2 - Web Search:
+{web_result}
+
+Source 3 - YouTube Videos:
+{youtube_result}
+
+Please provide a comprehensive, accurate answer by:
+1. Combining information from all three sources
+2. Highlighting any complementary information
+3. Noting any contradictions and explaining them
+4. Providing a well-structured, coherent response
+5. Citing which source provided specific information when relevant
+6. IMPORTANT: Explain the answer in a way that is easy to understand for students and use simple terms
+7. Recommend specific videos from YouTube results for visual learning when relevant
+
+Final Answer:
+One final answer that combines all sources of information and includes video recommendations for enhanced learning.
+
+Give me the best possible answer using all sources of information.
+"""
+        else:
+            synthesis_prompt = f"""
 You are an expert and helpful AI assistant in helping students understanding concepts. I have two sources of information to answer the user's query: "{query}"
 
 Source 1 - Document Search (RAG):
@@ -332,7 +444,7 @@ Give me the best possible answer using both sources of information.
         return f"Error synthesizing final answer: {str(e)}"
 
 async def main():
-    print("Hybrid AI Assistant ready! Combining document search (RAG) with web search.")
+    print("Enhanced Hybrid AI Assistant ready! Combining document search (RAG) with web search and YouTube videos.")
     print("The system will remember our conversation context.")
     
     while True:
@@ -353,9 +465,14 @@ async def main():
             web_result = await get_web_search_results(user_query)
             print("✅ Web search complete")
             
+            print("🎥 Searching YouTube...")
+            # Get YouTube search results
+            youtube_result = await get_youtube_search_results(user_query)
+            print("✅ YouTube search complete")
+            
             print("🤖 Synthesizing final answer...")
-            # Synthesize final answer using Gemini
-            final_answer = await synthesize_final_answer(user_query, rag_result, web_result)
+            # Synthesize final answer using Gemini with all three sources
+            final_answer = await synthesize_final_answer(user_query, rag_result, web_result, youtube_result)
             
             print(f"\n{'='*50}")
             print("FINAL ANSWER:")
