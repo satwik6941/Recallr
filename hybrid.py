@@ -40,11 +40,13 @@ Settings.llm = Gemini(
     api_key=os.getenv("GEMINI_API_KEY")
 )
 
-# Initialize LLM for agent
-Settings.llm1 = Groq(
+# Initialize LLM for agent with better settings
+groq_llm = Groq(
     model="llama-3.1-8b-instant",
     api_key=os.getenv("GROQ_API_KEY"),
     request_timeout=360.0,
+    temperature=0.1,  # Lower temperature for more consistent output
+    max_tokens=1000,  # Limit response length
 )
 
 # Try to load existing storage, otherwise create new indexes
@@ -167,7 +169,7 @@ def google_search(query: str) -> str:
             'key': os.getenv("GOOGLE_API_KEY"),
             'cx': os.getenv("GOOGLE_CSE_ID"),
             'q': query,
-            'num': 3  # Number of results to return
+            'num': 5  # Number of results to return
         }
         
         response = requests.get(url, params=params)
@@ -198,24 +200,31 @@ def google_search(query: str) -> str:
 google_search_tool = FunctionTool.from_defaults(
     fn=google_search,
     name="google_search",
-    description="Search the web always using Google Custom Search API. Use this always for current events, general knowledge, or any web search queries."
+    description="Search the web using Google Custom Search API. Use this for current events, general knowledge, or web search queries."
 )
 
-# Create ReActAgent with function calling capabilities
+# Create ReActAgent with improved system prompt and settings
 agent = ReActAgent.from_tools(
     [google_search_tool],
-    llm=Settings.llm1,
+    llm=groq_llm,
     verbose=True,
-    system_prompt="""You are a helpful AI assistant and expert in explain concepts, answering questions, and providing information for students.
-    You have been give access to the google search tool to find information on the web. 
+    max_iterations=3,  # Limit iterations to prevent infinite loops
+    system_prompt="""You are a helpful AI assistant. You have access to a google search tool.
 
+When responding, you must follow this exact format:
+
+Thought: I need to search for information about [topic].
+Action: google_search
+Action Input: [your search query]
+
+After getting the search results, provide a final answer based on the information found.
 For each user query:
 - Analyze what the user is asking for
 - Search the web using the google_search tool always when the user asks for information.
 - Return the results in a clear,simple and concise manner
 - Always provide helpful and detailed responses
 
-Be conversational and helpful!"""
+Always be conversational and helpful and be clear, concise, and helpful in your responses."""
 )
 
 async def search_documents_with_context(query: str) -> str:
@@ -249,7 +258,7 @@ Please answer the current question, considering the conversation context above.
         return f"Error searching documents: {str(e)}"
 
 async def get_web_search_results(query: str) -> str:
-    """Get web search results using Groq LLM and Google Custom Search
+    """Get web search results using direct Google search (bypassing agent for reliability)
     
     Args:
         query (str): The search query
@@ -258,11 +267,17 @@ async def get_web_search_results(query: str) -> str:
         str: Processed web search results
     """
     try:
-        # Get raw web search results
+        # Get raw web search results directly
         web_results = google_search(query)
         
-        # Use Groq LLM to process and summarize the web results
-        groq_response = await agent.achat(f"Based on these web search results, provide a comprehensive answer to the query '{query}':\n\n{web_results}")
+        # Use Groq LLM directly to process the results
+        process_prompt = f"""Based on these web search results, provide a comprehensive answer to the query '{query}':
+
+{web_results}
+
+Please provide a clear, concise answer based on the search results."""
+        
+        groq_response = await groq_llm.acomplete(process_prompt)
         
         return str(groq_response)
     except Exception as e:
@@ -287,6 +302,9 @@ Please provide a comprehensive, accurate answer by:
 4. Providing a well-structured, coherent response
 5. Citing which source provided specific information when relevant
 6. IMPORTANT: Explain the answer in a way that is easy to understand for students and use simple terms
+
+Final Answer:
+One final answer that combines both sources of information.
 
 Give me the best possible answer using both sources of information.
 """
@@ -331,7 +349,7 @@ async def main():
             print("✅ Document search complete")
             
             print("🌐 Searching web...")
-            # Get web search results using Groq
+            # Get web search results using Groq directly (more reliable)
             web_result = await get_web_search_results(user_query)
             print("✅ Web search complete")
             
