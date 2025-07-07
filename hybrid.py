@@ -12,6 +12,7 @@ from llama_index.core.retrievers import BaseRetriever
 from llama_index.llms.groq import Groq
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.node_parser import SimpleNodeParser
+from llama_index.llms.gemini import Gemini
 import asyncio
 import os
 import re
@@ -28,9 +29,9 @@ Settings.embed_model = HuggingFaceEmbedding(
     model_name="BAAI/bge-base-en-v1.5", 
     cache_folder="./cache"
 )
-Settings.llm = Groq(
-    model="llama-3.1-8b-instant",
-    api_key=os.getenv("GROQ_API_KEY"),
+Settings.llm = Gemini(
+    model="Gemini-2.0-flash",
+    api_key=os.getenv("GEMINI_API_KEY"),
     request_timeout=360.0,
 )
 
