@@ -9,29 +9,41 @@ from llama_index.core import (
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import BaseRetriever
-from llama_index.llms.groq import Groq
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.llms.gemini import Gemini
+from llama_index.llms.groq import Groq
+from llama_index.core.tools import FunctionTool
+from llama_index.core.agent import ReActAgent
 import asyncio
+import requests
 import os
 import re
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Validate API key
+# Validate API keys
 if not os.getenv("GROQ_API_KEY"):
     raise ValueError("GROQ_API_KEY environment variable is required")
+if not os.getenv("GEMINI_API_KEY"):
+    raise ValueError("GEMINI_API_KEY environment variable is required")
 
 # Settings control global defaults
 Settings.embed_model = HuggingFaceEmbedding(
-    model_name="BAAI/bge-base-en-v1.5", 
-    cache_folder="./cache"
+    model_name="intfloat/e5-large-v2", 
+    cache_folder="./cache",
+    device="cuda"  # Use CUDA for GPU acceleration
 )
 Settings.llm = Gemini(
-    model="Gemini-2.0-flash",
-    api_key=os.getenv("GEMINI_API_KEY"),
+    model="models/gemini-2.0-flash",
+    api_key=os.getenv("GEMINI_API_KEY")
+)
+
+# Initialize LLM for agent
+Settings.llm1 = Groq(
+    model="llama-3.1-8b-instant",
+    api_key=os.getenv("GROQ_API_KEY"),
     request_timeout=360.0,
 )
 
@@ -137,6 +149,75 @@ print("Creating query engine...")
 # Conversation context to maintain chat history
 conversation_history = []
 
+# Google Custom Search function
+def google_search(query: str) -> str:
+    """Search the web using Google Custom Search API
+    
+    Args:
+        query (str): The search query
+        
+    Returns:
+        str: Search results formatted as text
+    """
+    try:
+        # Google Custom Search API endpoint
+        url = "https://www.googleapis.com/customsearch/v1"
+        
+        params = {
+            'key': os.getenv("GOOGLE_API_KEY"),
+            'cx': os.getenv("GOOGLE_CSE_ID"),
+            'q': query,
+            'num': 3  # Number of results to return
+        }
+        
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        if 'items' not in data:
+            return f"No search results found for: {query}"
+        
+        # Format results
+        results = []
+        for item in data['items']:
+            title = item.get('title', 'No title')
+            link = item.get('link', 'No link')
+            snippet = item.get('snippet', 'No description')
+            
+            results.append(f"Title: {title}\nURL: {link}\nDescription: {snippet}\n")
+        
+        return f"Web search results for '{query}':\n\n" + "\n".join(results)
+        
+    except requests.exceptions.RequestException as e:
+        return f"Error performing web search: {str(e)}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# Create FunctionTool objects
+google_search_tool = FunctionTool.from_defaults(
+    fn=google_search,
+    name="google_search",
+    description="Search the web always using Google Custom Search API. Use this always for current events, general knowledge, or any web search queries."
+)
+
+# Create ReActAgent with function calling capabilities
+agent = ReActAgent.from_tools(
+    [google_search_tool],
+    llm=Settings.llm1,
+    verbose=True,
+    system_prompt="""You are a helpful AI assistant and expert in explain concepts, answering questions, and providing information for students.
+    You have been give access to the google search tool to find information on the web. 
+
+For each user query:
+- Analyze what the user is asking for
+- Search the web using the google_search tool always when the user asks for information.
+- Return the results in a clear,simple and concise manner
+- Always provide helpful and detailed responses
+
+Be conversational and helpful!"""
+)
+
 async def search_documents_with_context(query: str) -> str:
     """Search through documents using hybrid retrieval with conversation context
     
@@ -163,23 +244,77 @@ Please answer the current question, considering the conversation context above.
             context_prompt = query
             
         response = await hybrid_query_engine.aquery(context_prompt)
+        return str(response)
+    except Exception as e:
+        return f"Error searching documents: {str(e)}"
+
+async def get_web_search_results(query: str) -> str:
+    """Get web search results using Groq LLM and Google Custom Search
+    
+    Args:
+        query (str): The search query
         
-        # Add to conversation history
+    Returns:
+        str: Processed web search results
+    """
+    try:
+        # Get raw web search results
+        web_results = google_search(query)
+        
+        # Use Groq LLM to process and summarize the web results
+        groq_response = await agent.achat(f"Based on these web search results, provide a comprehensive answer to the query '{query}':\n\n{web_results}")
+        
+        return str(groq_response)
+    except Exception as e:
+        return f"Error getting web search results: {str(e)}"
+
+async def synthesize_final_answer(query: str, rag_result: str, web_result: str) -> str:
+    """Synthesize final answer from RAG and web search results"""
+    try:
+        synthesis_prompt = f"""
+You are an expert and helpful AI assistant in helping students understanding concepts. I have two sources of information to answer the user's query: "{query}"
+
+Source 1 - Document Search (RAG):
+{rag_result}
+
+Source 2 - Web Search:
+{web_result}
+
+Please provide a comprehensive, accurate answer by:
+1. Combining information from both sources
+2. Highlighting any complementary information
+3. Noting any contradictions and explaining them
+4. Providing a well-structured, coherent response
+5. Citing which source provided specific information when relevant
+6. IMPORTANT: Explain the answer in a way that is easy to understand for students and use simple terms
+
+Give me the best possible answer using both sources of information.
+"""
+        
+        # Use Gemini for final synthesis
+        gemini_llm = Gemini(
+            model="models/gemini-2.0-flash",
+            api_key=os.getenv("GEMINI_API_KEY")
+        )
+        
+        final_response = await gemini_llm.acomplete(synthesis_prompt)
+        
+        # Update conversation history with final answer
         conversation_history.append({
             "user": query,
-            "assistant": str(response)
+            "assistant": str(final_response)
         })
         
         # Keep only last 10 exchanges to prevent context overflow
         if len(conversation_history) > 10:
             conversation_history.pop(0)
             
-        return str(response)
+        return str(final_response)
     except Exception as e:
-        return f"Error searching documents: {str(e)}"
+        return f"Error synthesizing final answer: {str(e)}"
 
 async def main():
-    print("Document search ready! You can ask questions about documents.")
+    print("Hybrid AI Assistant ready! Combining document search (RAG) with web search.")
     print("The system will remember our conversation context.")
     
     while True:
@@ -189,22 +324,37 @@ async def main():
                 break
                 
             print("Processing...")
+            print("🔍 Searching documents...")
             
-            # Use direct search with context
-            result = await search_documents_with_context(user_query)
-            print(f"\nResponse: {result}")
+            # Get RAG results using Gemini
+            rag_result = await search_documents_with_context(user_query)
+            print("✅ Document search complete")
+            
+            print("🌐 Searching web...")
+            # Get web search results using Groq
+            web_result = await get_web_search_results(user_query)
+            print("✅ Web search complete")
+            
+            print("🤖 Synthesizing final answer...")
+            # Synthesize final answer using Gemini
+            final_answer = await synthesize_final_answer(user_query, rag_result, web_result)
+            
+            print(f"\n{'='*50}")
+            print("FINAL ANSWER:")
+            print(f"{'='*50}")
+            print(final_answer)
+            print(f"{'='*50}")
             
         except KeyboardInterrupt:
             print("\nExiting...")
             break
         except Exception as e:
             print(f"Error: {str(e)}")
-            # Final fallback
+            # Fallback to just RAG search
             try:
-                print("Trying fallback search...")
-                # Try sync version as final fallback
-                response = hybrid_query_engine.query(user_query)
-                print(f"Fallback result: {response}")
+                print("Trying fallback to document search only...")
+                result = await search_documents_with_context(user_query)
+                print(f"Fallback result: {result}")
             except Exception as fallback_error:
                 print(f"All methods failed: {fallback_error}")
 
