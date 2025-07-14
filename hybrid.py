@@ -181,16 +181,49 @@ async def search_documents_with_context(query: str, conversation_history: List[D
     
     try:
         # Build context-aware query
-        if conversation_history:
-            # Include recent conversation history for context
+        if conversation_history and len(conversation_history) > 0:
+            # Include recent conversation history for context resolution
             recent_history = conversation_history[-4:]  # Last 4 exchanges
+            
+            # First, let's resolve any references in the current query
+            context_for_resolution = ""
+            for h in recent_history:
+                context_for_resolution += f"User: {h['user']}\nAssistant: {h['assistant'][:400]}...\n\n"
+            
+            # Use LLM to resolve references and create a better search query
+            resolution_prompt = f"""
+Based on this recent conversation:
+{context_for_resolution}
+
+The user is now asking: "{query}"
+
+If this question contains pronouns (it, this, that, they, etc.) or refers to concepts from the previous conversation, please reformulate the query to be more specific and complete for document search. Include the specific topics, concepts, or terms being referenced.
+
+If the question is already clear and specific, return it as is.
+
+Reformulated query:"""
+            
+            resolved_response = await Settings.llm.acomplete(resolution_prompt)
+            resolved_query = str(resolved_response).strip()
+            
+            # Use the resolved query if it's meaningful, otherwise use original
+            search_query = resolved_query if len(resolved_query) > 10 and "reformulated" not in resolved_query.lower() else query
+            
+            # Now build the context for the final response
             context_prompt = f"""
-Previous conversation:
-{chr(10).join([f"User: {h['user']}" + chr(10) + f"Assistant: {h['assistant']}" for h in recent_history])}
+Previous conversation context:
+{chr(10).join([f"User: {h['user']}" + chr(10) + f"Assistant: {h['assistant'][:300]}..." for h in recent_history])}
 
 Current question: {query}
+Search query used: {search_query}
 
-Please answer the current question, considering the conversation context above.
+Please answer the current question considering:
+1. The conversation context above
+2. How this question relates to previous topics discussed
+3. Any references to earlier concepts or answers
+4. Provide a comprehensive answer that builds on our conversation
+
+Answer the question: {query}
 """
         else:
             context_prompt = query
