@@ -1,0 +1,39 @@
+# Core FastAPI dependencies
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+
+# CORS support
+python-cors
+
+# Existing dependencies from hybrid.py
+llama-index
+llama-index-core
+llama-index-embeddings-huggingface
+llama-index-llms-gemini
+llama-index-llms-groq
+llama-index-retrievers-bm25
+
+# Google API dependencies
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+
+# Other dependencies
+python-dotenv
+requests
+torch
+transformers
+sentence-transformers
+nltk
+rank-bm25
+
+# File processing
+python-magic
+PyPDF2
+docx2txt
+
+# Logging and monitoring
+structlog
