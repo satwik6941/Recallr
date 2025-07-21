@@ -4,6 +4,11 @@ from google.genai import types
 import os
 import dotenv as env
 from typing import List, Dict, Any
+import asyncio
+import os
+from dotenv import load_dotenv
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+import json
 
 env.load_dotenv()
 
@@ -13,15 +18,6 @@ conversation_history = []
 client = genai.Client(api_key=os.getenv("GEMINI_2_API_KEY"))
 
 def analyze_query_context_dependency(query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
-    """Analyze if the query depends on conversation context and extract key information
-    
-    Args:
-        query (str): The user's query
-        conversation_history (List[Dict]): Previous conversation history
-        
-    Returns:
-        Dict containing analysis results
-    """
     try:
         # Check for context-dependent words/phrases
         context_indicators = [
@@ -100,7 +96,7 @@ def process_query_with_context(user_query: str) -> str:
     context_analysis = analyze_query_context_dependency(user_query, conversation_history)
     
     if context_analysis.get('needs_context') and conversation_history:
-        print(f"🔄 Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}")
+        print(f"Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}")
         enhanced_query = build_context_aware_query(user_query, conversation_history)
     else:
         enhanced_query = user_query
@@ -181,18 +177,84 @@ Remember: This is a continuing conversation, not a standalone question. Be warm 
         if len(conversation_history) > 10:
             conversation_history.pop(0)
         
+        # Save Gemini's answer to file
+        output_filename = "code_results_answer.txt"
+        with open(output_filename, "w", encoding="utf-8") as f:
+            f.write(f"=== GEMINI'S ANSWER FOR: '{user_query}' ===\n\n")
+            f.write(response.text)
+            f.write("\n\n" + "="*60 + "\n\n")
+        
+        print(f"✅ Gemini's answer saved to '{output_filename}'")
+        
+        # Now get additional answers using crawl4ai
+        asyncio.run(get_additional_answers_with_crawl4ai(user_query, output_filename))
+        
         return response.text
         
     except Exception as e:
         return f"Error processing query: {str(e)}"
 
+async def get_additional_answers_with_crawl4ai(user_query: str, output_filename: str):
+    """Get additional answers using crawl4ai and append to the same file"""
+    
+    print("\n🔍 Getting additional answers using crawl4ai...")
+    
+    # Get top websites from Gemini
+    top_urls = await get_top_websites_from_gemini(user_query)
+    
+    if not top_urls:
+        with open(output_filename, "a", encoding="utf-8") as f:
+            f.write("=== CRAWL4AI RESULTS ===\n\n")
+            f.write("No relevant websites found for additional crawling.\n\n")
+        return
+    
+    # Append crawl4ai results header
+    with open(output_filename, "a", encoding="utf-8") as f:
+        f.write("=== CRAWL4AI ADDITIONAL ANSWERS ===\n\n")
+        f.write(f"Found {len(top_urls)} websites to crawl for additional information...\n\n")
+    
+    # Crawl websites and append results
+    async with AsyncWebCrawler(verbose=False) as crawler:
+        for i, url in enumerate(top_urls[:5], 1):  # Limit to 5 URLs for performance
+            print(f"Crawling [{i}/5]: {url}")
+            try:
+                crawler_config = CrawlerRunConfig(
+                    cache_mode="BYPASS",
+                    timeout=30
+                )
+                result = await crawler.arun(url=url, config=crawler_config)
+                
+                with open(output_filename, "a", encoding="utf-8") as f:
+                    f.write(f"--- Website {i}: {url} ---\n")
+                    
+                    if result.success and result.markdown.fit_markdown:
+                        content = result.markdown.fit_markdown[:3000]  # Limit content
+                        f.write(f"✅ Successfully crawled\n\n{content}\n\n")
+                        print(f"✅ Successfully crawled {url}")
+                    else:
+                        error_msg = result.error_message if result.error_message else "No substantial content found"
+                        f.write(f"❌ Failed to crawl: {error_msg}\n\n")
+                        print(f"❌ Failed to crawl {url}")
+                        
+            except Exception as e:
+                with open(output_filename, "a", encoding="utf-8") as f:
+                    f.write(f"❌ Error crawling {url}: {str(e)}\n\n")
+                print(f"❌ Error crawling {url}: {str(e)}")
+    
+    # Add final footer
+    with open(output_filename, "a", encoding="utf-8") as f:
+        f.write("="*60 + "\n")
+        f.write("END OF RESULTS\n")
+    
+    print(f"✅ All results saved to '{output_filename}'")
+
 def print_conversation_summary():
     """Print a summary of the current conversation"""
     if not conversation_history:
-        print("🔄 No conversation history yet.")
+        print("No conversation history yet.")
         return
     
-    print(f"\n📖 **Conversation Summary** ({len(conversation_history)} exchanges):")
+    print(f" **Conversation Summary** ({len(conversation_history)} exchanges):")
     for i, exchange in enumerate(conversation_history[-5:], 1):  # Show last 5
         print(f"  {i}. User: {exchange['user'][:60]}{'...' if len(exchange['user']) > 60 else ''}")
         print(f"     Bot: {exchange['assistant'][:80]}{'...' if len(exchange['assistant']) > 80 else ''}")
@@ -204,10 +266,45 @@ def clear_conversation_history():
     conversation_history.clear()
     print("🧹 Conversation history cleared!")
 
+async def get_top_websites_from_gemini(user_query: str) -> list[str]:
+    try:
+        prompt = f"""
+        Based on the following query, provide a list of up to 10 highly relevant and authoritative websites or resources (URLs only) where one could find comprehensive information.
+        Format your response as a JSON array of strings, where each string is a valid URL.
+        Only include the URLs, no other text or explanation.
+
+        Query: "{user_query}"
+
+        Example output:
+        ["https://www.example.com/resource1", "https://www.anothersite.org/info"]
+        """
+        
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json")
+        )
+        
+        if response and response.text:
+            try:
+                urls = json.loads(response.text)
+                # Filter to ensure they are valid-looking URLs and limit to 10
+                valid_urls = [url for url in urls if url.startswith("http")][:10]
+                return valid_urls
+            except json.JSONDecodeError:
+                print(f"Gemini did not return valid JSON for website list: {response.text}")
+                return []
+        else:
+            print("Gemini did not provide website suggestions.")
+            return []
+    except Exception as e:
+        print(f"Error getting websites from Gemini: {e}")
+        return []
+
 def main():
-    print("🚀 Enhanced Code Search Assistant with Conversation Context")
+    print("Enhanced Code Search Assistant with Conversation Context")
     print("The system will remember our conversation and resolve references like 'it', 'this', etc.")
-    print("\n💡 Tips:")
+    print("\n Tips:")
     print("- Ask follow-up questions using 'it', 'this', 'that' to test context resolution")
     print("- Type 'summary' to see conversation history")
     print("- Type 'clear' to clear conversation history")
@@ -219,7 +316,7 @@ def main():
             user_query = input("\nEnter your coding question (or 'quit'/'summary'/'clear'): ")
             
             if user_query.lower() in ['quit', 'exit', 'q']:
-                print("👋 Goodbye! Happy coding!")
+                print("Goodbye! Happy coding!")
                 break
             elif user_query.lower() == 'summary':
                 print_conversation_summary()
@@ -236,25 +333,25 @@ def main():
             # Analyze context dependency before processing
             context_analysis = analyze_query_context_dependency(user_query, conversation_history)
             if context_analysis.get('needs_context') and conversation_history:
-                print(f"🔄 Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}")
+                print(f"Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}")
                 if context_analysis.get('recent_topics'):
-                    print(f"📝 Recent topics: {', '.join(context_analysis['recent_topics'][:3])}")
+                    print(f"Recent topics: {', '.join(context_analysis['recent_topics'][:3])}")
             
             # Process query with context
             result = process_query_with_context(user_query)
             
             print(f"\n{'='*60}")
-            print("📝 ANSWER:")
+            print("ANSWER:")
             print(f"{'='*60}")
             print(result)
             print(f"{'='*60}")
-            print(f"💭 Conversation history: {len(conversation_history)} exchanges stored")
+            print(f"Conversation history: {len(conversation_history)} exchanges stored")
             
         except KeyboardInterrupt:
-            print("\n👋 Goodbye! Happy coding!")
+            print("\n Goodbye! Happy coding!")
             break
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"Error: {str(e)}")
             print("Please try again with a different question.")
 
 if __name__ == "__main__":
