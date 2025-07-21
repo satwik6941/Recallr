@@ -37,3 +37,6 @@ docx2txt
 
 # Logging and monitoring
 structlog
+
+# Web crawling
+crawl4ai
