@@ -342,9 +342,9 @@ async def synthesize_final_answer(query: str, rag_result: str, web_result: str, 
             conversation_context = ""
             if conversation_history:
                 conversation_context = "\n💬 **Previous Conversation:**\n"
-                for i, exchange in enumerate(conversation_history[-5:], 1):  # Last 5 exchanges for context
+                for i, exchange in enumerate(conversation_history[-10:], 1):  # Last 10 exchanges for context
                     conversation_context += f"{i}. Student asked: \"{exchange['user']}\"\n"
-                    conversation_context += f"   I responded: {exchange['assistant'][:200]}{'...' if len(exchange['assistant']) > 200 else ''}\n\n"
+                    conversation_context += f"   I responded: {exchange['assistant'][:2000]}{'...' if len(exchange['assistant']) > 2000 else ''}\n\n"
             
             synthesis_prompt = f"""
 You are a friendly and knowledgeable tutor helping a student understand concepts. Think of yourself as talking to a real person who needs clear, helpful explanations.
@@ -392,9 +392,9 @@ Please provide a helpful, human-like response that shows you understand the cont
             conversation_context = ""
             if conversation_history:
                 conversation_context = "\n💬 **Previous Conversation:**\n"
-                for i, exchange in enumerate(conversation_history[-5:], 1):  # Last 5 exchanges for context
+                for i, exchange in enumerate(conversation_history[-10:], 1):  # Last 10 exchanges for context
                     conversation_context += f"{i}. Student asked: \"{exchange['user']}\"\n"
-                    conversation_context += f"   I responded: {exchange['assistant'][:200]}{'...' if len(exchange['assistant']) > 200 else ''}\n\n"
+                    conversation_context += f"   I responded: {exchange['assistant'][:2000]}{'...' if len(exchange['assistant']) > 2000 else ''}\n\n"
             
             synthesis_prompt = f"""
 You are a friendly and knowledgeable tutor helping a student understand concepts. Think of yourself as talking to a real person who needs clear, helpful explanations.
@@ -465,7 +465,7 @@ Please provide a helpful, human-like response that shows you understand the cont
 
 async def main():
     print("Enhanced Hybrid AI Assistant starting up...")
-    print("Initializing RAG pipeline...")
+    print("Initializing the pipeline...")
     
     # Initialize RAG pipeline first by making a dummy call to trigger index loading
     try:
@@ -476,20 +476,14 @@ async def main():
         print(f"⚠️ Warning: RAG initialization failed: {e}")
         print("Continuing with web search and YouTube only...")
     
-    print("🚀 System ready! Combining document search (RAG) with web search and YouTube videos.")
-    print("The system will remember our conversation context and resolve references like 'it', 'this', etc.")
-    print("\n💡 Tips:")
-    print("- Ask follow-up questions using 'it', 'this', 'that' to test context resolution")
-    print("- Type 'summary' to see conversation history")
-    print("- The system will automatically detect when you're referring to previous topics")
-    
     while True:
         try:
             user_query = input("\nEnter your query (or 'quit'/'summary' for options): ")
             if user_query.lower() in ['quit', 'exit', 'q']:
+                print("Happy Learning!")
                 break
             elif user_query.lower() == 'summary':
-                print_conversation_summary()
+                await print_conversation_summary()
                 continue
                 
             print("Processing...")
@@ -529,6 +523,7 @@ async def main():
             
         except KeyboardInterrupt:
             print("\nExiting...")
+            print("Happy learning!")
             break
         except Exception as e:
             print(f"Error: {str(e)}")
@@ -540,18 +535,48 @@ async def main():
             except Exception as fallback_error:
                 print(f"All methods failed: {fallback_error}")
 
-def print_conversation_summary():
-    """Print a summary of the current conversation"""
+async def print_conversation_summary():
+    """Print an AI-generated summary of the current conversation"""
     if not conversation_history:
         print("🔄 No conversation history yet.")
         return
     
-    print(f"\n📖 **Conversation Summary** ({len(conversation_history)} exchanges):")
-    for i, exchange in enumerate(conversation_history[-3:], 1):  # Show last 3
-        print(f"  {i}. User: {exchange['user'][:60]}{'...' if len(exchange['user']) > 60 else ''}")
-        print(f"     Bot: {exchange['assistant'][:80]}{'...' if len(exchange['assistant']) > 80 else ''}")
-    print()
+    try:
+        # Build the conversation context for the LLM
+        conversation_text = ""
+        for i, exchange in enumerate(conversation_history, 1):
+            conversation_text += f"Exchange {i}:\n"
+            conversation_text += f"User: {exchange['user']}\n"
+            conversation_text += f"Assistant: {exchange['assistant']}\n\n"
+        
+        # Simple system prompt for summarization
+        summary_prompt = f"""Please provide a clear and concise summary of this conversation between a student and an AI tutor. 
+        Focus on the main topics discussed, key questions asked, and important concepts covered.
 
-# Run the orchestrator
+Conversation:
+{conversation_text}
+
+Summary:"""
+        
+        print("🤖 Generating conversation summary...")
+        
+        # Use Groq LLM to generate the summary
+        summary_response = await groq_llm.acomplete(summary_prompt)
+        
+        print(f"\n📖 **Conversation Summary** ({len(conversation_history)} exchanges):")
+        print("=" * 60)
+        print(str(summary_response))
+        print("=" * 60)
+        print()
+        
+    except Exception as e:
+        print(f"Error generating summary: {str(e)}")
+        # Fallback to the original format if LLM fails
+        print(f"\n📖 **Conversation Summary** ({len(conversation_history)} exchanges):")
+        for i, exchange in enumerate(conversation_history[-10:], 1):  # Show last 10
+            print(f"  {i}. User: {exchange['user'][:60]}{'...' if len(exchange['user']) > 60 else ''}")
+            print(f"     Bot: {exchange['assistant'][:800]}{'...' if len(exchange['assistant']) > 800 else ''}")
+        print()
+
 if __name__ == "__main__":
     asyncio.run(main())

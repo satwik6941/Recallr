@@ -9,7 +9,7 @@ from llama_index.core import (
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import BaseRetriever
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.embeddings.gemini import GeminiEmbedding
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.llms.gemini import Gemini
 import os
@@ -23,11 +23,11 @@ if not os.getenv("GEMINI_API_KEY"):
     raise ValueError("GEMINI_API_KEY environment variable is required")
 
 # Settings control global defaults
-Settings.embed_model = HuggingFaceEmbedding(
-    model_name="intfloat/e5-large-v2", 
-    cache_folder="./cache",
-    device="cuda"  # Use CUDA for GPU acceleration
+Settings.embed_model = GeminiEmbedding(
+    model_name="models/embedding-001",
+    api_key=os.getenv("GEMINI_API_KEY")
 )
+
 Settings.llm = Gemini(
     model="models/gemini-2.0-flash",
     api_key=os.getenv("GEMINI_API_KEY")
