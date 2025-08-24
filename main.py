@@ -15,8 +15,8 @@ from hybrid import (
 load_dotenv()
 
 # Validate API keys
-if not os.getenv("GEMINI_1_API_KEY"):
-    raise ValueError("GEMINI_1_API_KEY environment variable is required")
+if not os.getenv("GEMINI_API_KEY"):
+    raise ValueError("GEMINI_API_KEY environment variable is required")
 
 # YouTube API key is optional - will gracefully handle if missing
 youtube_api_key = os.getenv("YOUTUBE_API_KEY")
@@ -137,7 +137,7 @@ Please provide a helpful, human-like response that shows you understand the cont
         # Use Gemini for final synthesis
         gemini_llm = Gemini(
             model="models/gemini-2.0-flash",
-            api_key=os.getenv("GEMINI_1_API_KEY")
+            api_key=os.getenv("GEMINI_API_KEY")
         )
         
         final_response = await gemini_llm.acomplete(synthesis_prompt)
