@@ -27,21 +27,13 @@ if not os.getenv("GEMINI_1_API_KEY"):
 if not os.getenv("GROQ_API_KEY"):
     raise ValueError("GROQ_API_KEY environment variable is required")
 
-# Global variables for lazy initialization
-groq_llm = None
-
-def get_groq_llm():
-    """Lazy initialization of Groq LLM"""
-    global groq_llm
-    if groq_llm is None:
-        groq_llm = Groq(
-            model="llama-3.1-8b-instant",
-            api_key=os.getenv("GROQ_API_KEY"),
-            request_timeout=360.0,
-            temperature=0.1,  # Lower temperature for more consistent output
-            max_tokens=1000,  # Limit response length
-        )
-    return groq_llm
+groq_llm = Groq(
+    model="llama-3.3-70b-versatile",
+    api_key=os.getenv("GROQ_API_KEY"),
+    request_timeout=360.0,
+    temperature=0.1,  # Lower 
+    max_tokens=2000,  # Limit response length
+)
 
 # Settings control global defaults - these will be set when RAG is initialized
 def initialize_gemini_settings():
@@ -62,16 +54,301 @@ keyword_index = None
 hybrid_query_engine = None
 nodes = None
 
-async def analyze_query_context_dependency(query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
-    """Analyze if the query depends on conversation context and extract key information
+# Message management functions for cleaner conversation handling
+def add_user_message(messages: List[Dict], user_prompt: str):
+    """Add user message to conversation messages"""
+    messages.append({
+        "role": "user",
+        "content": user_prompt
+    })
+
+def add_ai_message(messages: List[Dict], ai_response: str):
+    """Add AI response to conversation messages"""
+    messages.append({
+        "role": "assistant", 
+        "content": ai_response
+    })
+
+def get_conversation_context_from_messages(messages: List[Dict], limit: int = 12) -> str:
+    """Build conversation context string from messages list
     
     Args:
-        query (str): The user's query
-        conversation_history (List[Dict]): Previous conversation history
+        messages: List of message dictionaries with 'role' and 'content'
+        limit: Maximum number of recent messages to include
+    """
+    if not messages:
+        return ""
+    
+    # Get recent messages (limit to avoid context overflow)
+    recent_messages = messages[-limit:] if len(messages) > limit else messages
+    
+    context = "Previous conversation context:\n"
+    for msg in recent_messages:
+        role = msg["role"].title()
+        content = msg["content"][:200] + "..." if len(msg["content"]) > 200 else msg["content"]
+        context += f"{role}: {content}\n"
+    
+    return context + "\n"
+
+def analyze_query_context_dependency_simple(query: str, messages: List[Dict] = None) -> Dict[str, Any]:
+    """Analyze if the query depends on conversation context using simple message structure"""
+    context_indicators = [
+        'it', 'this', 'that', 'they', 'them', 'these', 'those',
+        'the above', 'previously', 'earlier', 'before', 'as mentioned',
+        'like you said', 'from what you told', 'the one you mentioned',
+        'explain more', 'tell me more', 'elaborate', 'expand on',
+        'what about', 'how about', 'and also', 'additionally'
+    ]
+    
+    needs_context = any(indicator in query.lower() for indicator in context_indicators)
+    found_indicators = [indicator for indicator in context_indicators if indicator in query.lower()]
+    
+    return {
+        'needs_context': needs_context,
+        'context_indicators_found': found_indicators,
+        'has_conversation': bool(messages and len(messages) > 0)
+    }
+
+async def search_documents_with_messages(query: str, messages: List[Dict] = None) -> str:
+    """Search through documents using hybrid retrieval with message-based conversation context
+    
+    Args:
+        query (str): The search query to find relevant documents
+        messages (List[Dict]): Message list with 'role' and 'content' for context
         
     Returns:
-        Dict containing analysis results
+        str: The response from the document search
     """
+    global hybrid_query_engine
+    
+    # Initialize if not already done
+    if hybrid_query_engine is None:
+        initialize_rag_pipeline()
+    
+    try:
+        # Build context-aware query using message structure
+        if messages and len(messages) > 0:
+            # Get conversation context from messages
+            conversation_context = get_conversation_context_from_messages(messages, limit=8)
+            
+            # First, let's resolve any references in the current query
+            resolution_prompt = f"""
+Based on this recent conversation:
+{conversation_context}
+
+The user is now asking: "{query}"
+
+If this question contains pronouns (it, this, that, they, etc.) or refers to concepts from the previous conversation, please reformulate the query to be more specific and complete for document search. Include the specific topics, concepts, or terms being referenced.
+
+If the question is already clear and specific, return it as is.
+
+Reformulated query:"""
+            
+            resolved_response = await Settings.llm.acomplete(resolution_prompt)
+            resolved_query = str(resolved_response).strip()
+            
+            # Use the resolved query if it's meaningful, otherwise use original
+            search_query = resolved_query if len(resolved_query) > 10 and "reformulated" not in resolved_query.lower() else query
+            
+            # Now build the context for the final response
+            context_prompt = f"""
+{conversation_context}
+
+Current question: {query}
+Search query used: {search_query}
+
+Please answer the current question considering:
+1. The conversation context above
+2. How this question relates to previous topics discussed
+3. Any references to earlier concepts or answers
+4. Provide a comprehensive answer that builds on our conversation
+
+Answer the question: {query}
+"""
+        else:
+            context_prompt = query
+            
+        response = await hybrid_query_engine.aquery(context_prompt)
+        return str(response)
+    except Exception as e:
+        return f"Error searching documents: {str(e)}"
+
+async def get_web_search_with_messages(query: str, messages: List[Dict] = None) -> str:
+    """Get web search results using message-based conversation context
+    
+    Args:
+        query (str): The search query
+        messages (List[Dict]): Message list for context
+        
+    Returns:
+        str: Processed web search results
+    """
+    try:
+        # Build context-aware query for web search using messages
+        if messages and len(messages) > 0:
+            # Get recent conversation context from messages
+            conversation_context = get_conversation_context_from_messages(messages, limit=6)
+            
+            # Create an enhanced query that resolves references
+            context_prompt = f"""
+Based on this recent conversation:
+{conversation_context}
+
+The user is now asking: "{query}"
+
+If the user's question contains pronouns like "it", "this", "that", "they", etc., or refers to something from the previous conversation, please rephrase the query to be more specific and searchable. Otherwise, keep the original query.
+
+Provide only the reformulated search query:"""
+            
+            reformulated_response = await groq_llm.acomplete(context_prompt)
+            search_query = str(reformulated_response).strip()
+            
+            # If the reformulated query is too short or unclear, use original
+            if len(search_query) < 10 or "reformulated" in search_query.lower():
+                search_query = query
+        else:
+            search_query = query
+        
+        # Get raw web search results directly
+        web_results = google_search(search_query)
+        
+        # Use Groq LLM directly to process the results with context
+        if messages and len(messages) > 0:
+            conversation_context = get_conversation_context_from_messages(messages, limit=6)
+            process_prompt = f"""You are answering a follow-up question in an ongoing conversation.
+
+Recent conversation context:
+{conversation_context}
+
+Current question: "{query}"
+Search query used: "{search_query}"
+
+Web search results:
+{web_results}
+
+Please provide a comprehensive answer that:
+1. Considers the conversation context
+2. Addresses the current question directly
+3. Resolves any references to previous topics
+4. Uses the web search results to provide accurate information
+
+Answer:"""
+        else:
+            process_prompt = f"""Based on these web search results, provide a comprehensive answer to the query '{query}':
+
+{web_results}
+
+Please provide a clear, concise answer based on the search results."""
+        
+        groq_response = await groq_llm.acomplete(process_prompt)
+        
+        return str(groq_response)
+    except Exception as e:
+        return f"Error getting web search results: {str(e)}"
+
+async def get_youtube_search_with_messages(query: str, messages: List[Dict] = None) -> str:
+    """Get YouTube search results using message-based conversation context
+    
+    Args:
+        query (str): The search query
+        messages (List[Dict]): Message list for context
+        
+    Returns:
+        str: Processed YouTube search results
+    """
+    try:
+        print(f"Calling external YouTube module...")
+        
+        # Build context-aware query for YouTube search using messages
+        if messages and len(messages) > 0:
+            # Get recent conversation context from messages
+            conversation_context = get_conversation_context_from_messages(messages, limit=6)
+            
+            # Create an enhanced query that resolves references
+            context_prompt = f"""
+Based on this recent conversation:
+{conversation_context}
+
+The user is now asking: "{query}"
+
+If the user's question contains pronouns like "it", "this", "that", "they", etc., or refers to something from the previous conversation, please rephrase the query to be more specific and searchable for YouTube videos. Otherwise, keep the original query.
+
+Provide only the reformulated search query:"""
+            
+            reformulated_response = await groq_llm.acomplete(context_prompt)
+            search_query = str(reformulated_response).strip()
+            
+            # If the reformulated query is too short or unclear, use original
+            if len(search_query) < 10 or "reformulated" in search_query.lower():
+                search_query = query
+        else:
+            search_query = query
+        
+        # Import and use the external youtube module
+        sys.path.append(os.path.dirname(__file__))
+        
+        from youtube import process_youtube_query
+        
+        # Get YouTube search results from external module
+        youtube_results = await process_youtube_query(search_query)
+        
+        # Check if we got results
+        if "No YouTube videos found" in youtube_results or "Error" in youtube_results:
+            return youtube_results
+        
+        # Use Groq LLM to process and summarize the results while preserving URLs
+        if messages and len(messages) > 0:
+            conversation_context = get_conversation_context_from_messages(messages, limit=6)
+            process_prompt = f"""You are helping with a follow-up question in an ongoing conversation.
+
+Recent conversation context:
+{conversation_context}
+
+Current question: "{query}"
+Search query used: "{search_query}"
+
+YouTube search results:
+{youtube_results}
+
+IMPORTANT: 
+1. Always include the exact YouTube URLs from the original results
+2. Format each video recommendation as: "Video Title" - URL: [exact URL]
+3. Recommend the top 3 videos for learning, considering the conversation context
+4. Keep all the URLs exactly as provided in the original results
+5. Address how these videos relate to the current question and previous conversation
+
+Please provide a clear summary highlighting the most relevant videos for learning:"""
+        else:
+            process_prompt = f"""Based on these YouTube search results, provide a summary of the available educational videos for the query '{query}':
+
+{youtube_results}
+
+IMPORTANT: 
+1. Always include the exact YouTube URLs from the original results
+2. Format each video recommendation as: "Video Title" - URL: [exact URL]
+3. Recommend the top 3 videos for learning
+4. Keep all the URLs exactly as provided in the original results
+
+Please provide a clear summary highlighting the most relevant videos for learning."""
+        
+        groq_response = await groq_llm.acomplete(process_prompt)
+        
+        # Combine original results with AI summary, ensuring URLs are preserved
+        final_result = f"{youtube_results}\n\n**AI Summary:**\n{str(groq_response)}\n\n**Direct Video Links:**\n"
+        
+        # Extract and add direct links from original results to ensure they're visible
+        lines = youtube_results.split('\n')
+        for line in lines:
+            if 'URL:' in line or 'https://www.youtube.com/watch' in line:
+                final_result += f"{line}\n"
+        
+        return final_result
+        
+    except Exception as e:
+        return f"Error getting YouTube search results: {str(e)}"
+
+# Legacy function for backward compatibility
+async def analyze_query_context_dependency(query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
     try:
         # Check for context-dependent words/phrases
         context_indicators = [
@@ -96,13 +373,13 @@ Assistant: {exchange['assistant'][:200]}...
 
 List the key topics/concepts (maximum 3):"""
                 
-                topics_response = await get_groq_llm().acomplete(topics_prompt)
+                topics_response = await groq_llm.acomplete(topics_prompt)
                 topics = str(topics_response).strip().split('\n')
                 recent_topics.extend([topic.strip('- ').strip() for topic in topics if topic.strip()])
         
         return {
             'needs_context': needs_context,
-            'recent_topics': recent_topics[:5],  # Keep top 5 recent topics
+            'recent_topics': recent_topics,  # Keep top 5 recent topics
             'context_indicators_found': [indicator for indicator in context_indicators if indicator in query.lower()]
         }
         
@@ -173,7 +450,7 @@ async def get_web_search_results(query: str, conversation_history: List[Dict] = 
         if conversation_history and len(conversation_history) > 0:
             # Get recent conversation context
             recent_context = ""
-            for exchange in conversation_history[-3:]:  # Last 3 exchanges
+            for exchange in conversation_history:  # Last 3 exchanges
                 recent_context += f"User asked: {exchange['user']}\nAssistant answered: {exchange['assistant'][:300]}...\n\n"
             
             # Create an enhanced query that resolves references
@@ -187,7 +464,7 @@ If the user's question contains pronouns like "it", "this", "that", "they", etc.
 
 Provide only the reformulated search query:"""
             
-            reformulated_response = await get_groq_llm().acomplete(context_prompt)
+            reformulated_response = await groq_llm.acomplete(context_prompt)
             search_query = str(reformulated_response).strip()
             
             # If the reformulated query is too short or unclear, use original
@@ -226,7 +503,7 @@ Answer:"""
 
 Please provide a clear, concise answer based on the search results."""
         
-        groq_response = await get_groq_llm().acomplete(process_prompt)
+        groq_response = await groq_llm.acomplete(process_prompt)
         
         return str(groq_response)
     except Exception as e:
@@ -249,7 +526,7 @@ async def get_youtube_search_results(query: str, conversation_history: List[Dict
         if conversation_history and len(conversation_history) > 0:
             # Get recent conversation context
             recent_context = ""
-            for exchange in conversation_history[-3:]:  # Last 3 exchanges
+            for exchange in conversation_history: 
                 recent_context += f"User asked: {exchange['user']}\nAssistant answered: {exchange['assistant'][:300]}...\n\n"
             
             # Create an enhanced query that resolves references
@@ -263,7 +540,7 @@ If the user's question contains pronouns like "it", "this", "that", "they", etc.
 
 Provide only the reformulated search query:"""
             
-            reformulated_response = await get_groq_llm().acomplete(context_prompt)
+            reformulated_response = await groq_llm.acomplete(context_prompt)
             search_query = str(reformulated_response).strip()
             
             # If the reformulated query is too short or unclear, use original
@@ -318,7 +595,7 @@ IMPORTANT:
 
 Please provide a clear summary highlighting the most relevant videos for learning."""
         
-        groq_response = await get_groq_llm().acomplete(process_prompt)
+        groq_response = await groq_llm.acomplete(process_prompt)
         
         # Combine original results with AI summary, ensuring URLs are preserved
         final_result = f"{youtube_results}\n\n**AI Summary:**\n{str(groq_response)}\n\n**Direct Video Links:**\n"
@@ -539,6 +816,47 @@ def get_rag_query_engine():
         initialize_rag_pipeline()
     
     return hybrid_query_engine
+
+# High-level convenience functions following the provided pattern
+async def search_with_messages(query: str, messages: List[Dict]) -> str:
+    """High-level search function that combines RAG, web search and YouTube
+    
+    Args:
+        query: User's search query
+        messages: Conversation messages list with 'role' and 'content'
+    
+    Returns:
+        Comprehensive search results
+    """
+    try:
+        print("🔍 Searching documents...")
+        rag_result = await search_documents_with_messages(query, messages)
+        
+        print("🌐 Searching web...")
+        web_result = await get_web_search_with_messages(query, messages)
+        
+        print("🎥 Searching YouTube...")
+        youtube_result = await get_youtube_search_with_messages(query, messages)
+        
+        # Combine results
+        combined_result = f"""
+📚 **Document Search Results:**
+{rag_result}
+
+🌐 **Web Search Results:**
+{web_result}
+
+🎥 **YouTube Results:**
+{youtube_result}
+"""
+        return combined_result
+        
+    except Exception as e:
+        return f"Error in search_with_messages: {str(e)}"
+
+def get_groq_llm():
+    """Get the Groq LLM instance for external use"""
+    return groq_llm
 
 # Initialize the pipeline when the module is imported
 if __name__ == "__main__":
