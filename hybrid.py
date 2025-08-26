@@ -11,7 +11,7 @@ from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.embeddings.gemini import GeminiEmbedding
 from llama_index.core.node_parser import SimpleNodeParser
-from llama_index.llms.gemini import Gemini
+from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.llms.groq import Groq
 import os
 import requests
@@ -43,7 +43,7 @@ def initialize_gemini_settings():
         api_key=os.getenv("GEMINI_1_API_KEY")
     )
 
-    Settings.llm = Gemini(
+    Settings.llm = GoogleGenAI(
         model="models/gemini-2.0-flash",
         api_key=os.getenv("GEMINI_1_API_KEY")
     )
@@ -364,7 +364,7 @@ async def analyze_query_context_dependency(query: str, conversation_history: Lis
         # Get recent topics from conversation history
         recent_topics = []
         if conversation_history and len(conversation_history) > 0:
-            for exchange in conversation_history[-3:]:
+            for exchange in conversation_history:
                 # Extract key topics from recent exchanges
                 topics_prompt = f"""
 Extract the main topics/concepts from this conversation exchange:
@@ -646,24 +646,59 @@ def initialize_rag_pipeline():
         if os.path.exists(storage_dir) and os.path.exists(os.path.join(storage_dir, "index_store.json")):
             storage_context = StorageContext.from_defaults(persist_dir=storage_dir)
             
-            # Try to load with specific index IDs
+            # Try to load with specific index IDs first
+            vector_index = None
+            keyword_index = None
+            
             try:
                 vector_index = load_index_from_storage(storage_context, index_id="vector")
+                print("✅ Vector index loaded successfully")
+            except Exception as vector_error:
+                print(f"⚠️ Failed to load vector index with ID: {vector_error}")
+                try:
+                    # Try loading without index ID (fallback)
+                    vector_index = load_index_from_storage(storage_context)
+                    print("✅ Vector index loaded without ID")
+                except Exception as fallback_error:
+                    print(f"❌ Failed to load vector index completely: {fallback_error}")
+                    vector_index = None
+            
+            try:
                 keyword_index = load_index_from_storage(storage_context, index_id="keyword")
-                print("Loaded existing indexes from storage.")
-            except Exception as index_error:
-                print(f"Failed to load specific indexes: {index_error}")
-                # Try loading without index IDs (fallback)
-                vector_index = load_index_from_storage(storage_context)
-                keyword_index = SimpleKeywordTableIndex(nodes)  # Recreate keyword index
-                print("Loaded vector index, recreated keyword index.")
+                print("✅ Keyword index loaded successfully")
+            except Exception as keyword_error:
+                print(f"⚠️ Failed to load keyword index: {keyword_error}")
+                keyword_index = None
+            
+            # If either index failed to load, recreate the missing ones
+            if vector_index is None or keyword_index is None:
+                print("🔄 Recreating missing indexes...")
+                if vector_index is None:
+                    print("Creating new vector index...")
+                    vector_index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
+                if keyword_index is None:
+                    print("Creating new keyword index...")
+                    keyword_index = SimpleKeywordTableIndex(nodes)
+                
+                # Save the newly created indexes
+                print("💾 Saving reconstructed indexes...")
+                try:
+                    vector_index.set_index_id("vector")
+                    keyword_index.set_index_id("keyword")
+                    vector_index.storage_context.persist(persist_dir=storage_dir)
+                    keyword_index.storage_context.persist(persist_dir=storage_dir)
+                    print("✅ Indexes saved successfully")
+                except Exception as save_error:
+                    print(f"⚠️ Warning: Could not save indexes: {save_error}")
+            else:
+                print("✅ All indexes loaded successfully from storage")
         else:
             raise Exception("Storage directory or index_store.json not found")
         
     except Exception as e:
         print(f"Could not load from storage ({e}), creating new indexes...")
         
-        print("Creating indexes...")
+        print("Creating new indexes from scratch...")
         # Create vector store index from nodes (with chunking)
         vector_index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
         
@@ -671,7 +706,7 @@ def initialize_rag_pipeline():
         keyword_index = SimpleKeywordTableIndex(nodes)
         
         # Save indexes to storage with improved error handling
-        print("Saving indexes to storage...")
+        print("Saving new indexes to storage...")
         try:
             # Ensure storage directory exists
             os.makedirs(storage_dir, exist_ok=True)
@@ -758,7 +793,7 @@ async def search_documents_with_context(query: str, conversation_history: List[D
         # Build context-aware query
         if conversation_history and len(conversation_history) > 0:
             # Include recent conversation history for context resolution
-            recent_history = conversation_history[-4:]  # Last 4 exchanges
+            recent_history = conversation_history 
             
             # First, let's resolve any references in the current query
             context_for_resolution = ""

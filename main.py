@@ -1,8 +1,9 @@
 import asyncio
 import os
+import json
 from typing import List, Dict, Any
 from dotenv import load_dotenv
-from llama_index.llms.gemini import Gemini
+from llama_index.llms.google_genai import GoogleGenAI
 
 # Import the RAG pipeline and search functions from hybrid.py
 from hybrid import (
@@ -23,6 +24,184 @@ youtube_api_key = os.getenv("YOUTUBE_API_KEY")
 if not youtube_api_key:
     print("Warning: YOUTUBE_API_KEY not found. YouTube search functionality will be limited.")
 
+async def analyze_query_routing(query: str) -> Dict[str, Any]:
+    """Use orchestrator LLM to analyze query and determine routing strategy"""
+    try:
+        # Build conversation context
+        conversation_context = ""
+        if conversation_history:
+            conversation_context = "\n💬 **Recent Conversation Context:**\n"
+            for i, exchange in enumerate(conversation_history[-3:], 1):  # Last 3 exchanges for context
+                conversation_context += f"{i}. User: \"{exchange['user']}\"\n"
+                conversation_context += f"   Assistant: {exchange['assistant'][:200]}{'...' if len(exchange['assistant']) > 200 else ''}\n\n"
+
+        routing_prompt = f"""
+You are an intelligent query router for an AI academic assistant. Analyze the user's query and determine the best routing strategy.
+
+{conversation_context}
+
+Current user query: "{query}"
+
+Available routing options:
+1. CODE_SEARCH - For programming, coding, software development, debugging, algorithms, data structures, specific programming languages, frameworks, libraries, APIs, etc.
+2. ACADEMIC_RAG - For academic subjects, study materials, course content, general knowledge, research topics, etc.
+
+Instructions:
+- Analyze the query carefully considering the conversation context
+- If the query is about programming, coding, software development, debugging, or any technical coding topic, route to CODE_SEARCH
+- If the query is about academic subjects, study materials, or general knowledge, route to ACADEMIC_RAG
+- Consider context - if previous messages were about coding and current query uses pronouns like "it", "this", "that", it might be coding-related
+
+Respond with ONLY a JSON object in this exact format:
+{{
+    "routing": "CODE_SEARCH_OR_ACADEMIC_RAG",
+    "confidence": 0.8,
+    "reasoning": "brief explanation of why this routing was chosen"
+}}
+
+Where routing should be either "CODE_SEARCH" or "ACADEMIC_RAG".
+"""
+
+        # Use Gemini orchestrator for routing decision
+        gemini_llm = GoogleGenAI(
+            model="models/gemini-2.0-flash",
+            api_key=os.getenv("GEMINI_API_KEY")
+        )
+        
+        routing_response = await gemini_llm.acomplete(routing_prompt)
+        routing_text = str(routing_response).strip()
+        
+        # Parse JSON response
+        try:
+            # Extract JSON from response if it's wrapped in other text
+            import json
+            if '{' in routing_text and '}' in routing_text:
+                json_start = routing_text.find('{')
+                json_end = routing_text.rfind('}') + 1
+                json_text = routing_text[json_start:json_end]
+                routing_data = json.loads(json_text)
+                
+                return {
+                    'routing': routing_data.get('routing', 'ACADEMIC_RAG'),
+                    'confidence': routing_data.get('confidence', 0.5),
+                    'reasoning': routing_data.get('reasoning', 'Default routing'),
+                    'raw_response': routing_text
+                }
+            else:
+                # Fallback if JSON parsing fails
+                return {
+                    'routing': 'ACADEMIC_RAG',
+                    'confidence': 0.5,
+                    'reasoning': 'JSON parsing failed, defaulting to academic RAG',
+                    'raw_response': routing_text
+                }
+        except json.JSONDecodeError:
+            return {
+                'routing': 'ACADEMIC_RAG',
+                'confidence': 0.5,
+                'reasoning': 'JSON parsing error, defaulting to academic RAG',
+                'raw_response': routing_text
+            }
+            
+    except Exception as e:
+        # Fallback to academic RAG if routing fails
+        return {
+            'routing': 'ACADEMIC_RAG',
+            'confidence': 0.5,
+            'reasoning': f'Routing analysis failed: {str(e)}',
+            'raw_response': ''
+        }
+
+async def code_search_answer(query: str) -> str:
+    """Handle coding-related queries using code_search.py"""
+    try:
+        print("🔍 Detected coding query - routing to specialized code assistant...")
+        
+        # Import the required functions from code_search.py
+        from code_search import chat_with_gemini, add_user_message, add_ai_message, save_conversation_to_file
+        import time
+        import os
+        
+        # Add user message to code search context
+        add_user_message(query)
+        
+        # Get response from code search assistant
+        print("🤖 Getting response from code search assistant...")
+        code_response = chat_with_gemini(query)
+        
+        # Add AI response to code search context
+        add_ai_message(code_response)
+        
+        # Explicitly save conversation to file
+        print("💾 Saving conversation to file...")
+        save_conversation_to_file(query, code_response)
+        
+        # Wait a moment for file to be written
+        time.sleep(0.5)
+        
+        # Read the output file to get the complete conversation
+        output_content = ""
+        output_file_path = "code_results_answer.txt"
+        
+        # Try to read the file with multiple attempts
+        for attempt in range(3):
+            try:
+                if os.path.exists(output_file_path):
+                    with open(output_file_path, "r", encoding="utf-8") as f:
+                        output_content = f.read()
+                    print("✅ Successfully read output file")
+                    break
+                else:
+                    print(f"⚠️ Attempt {attempt + 1}: Output file not found, waiting...")
+                    time.sleep(1)
+            except Exception as file_error:
+                print(f"⚠️ Attempt {attempt + 1}: Error reading file: {file_error}")
+                time.sleep(1)
+        
+        # If file reading failed, use direct response
+        if not output_content:
+            print("⚠️ Could not read output file, using direct response")
+            output_content = f"USER: {query}\\n\\nASSISTANT: {code_response}"
+        
+        # Analyze the code search results with the orchestrator LLM
+        analysis_prompt = f"""You are an expert coding assistant who has 20+ years of experience in analyzing and providing coding assistance results.
+
+Original user query: "{query}"
+
+Code search assistant response and conversation log:
+{output_content}
+
+Please provide a final, polished answer that:
+1. Directly addresses the user's coding question
+2. Maintains the conversational tone from our ongoing session
+3. Includes any relevant code examples or explanations from the code search results
+4. Builds on our previous conversation if relevant
+5. Is clear, concise, and helpful for a student learning to code
+
+Remember: This is part of an ongoing conversation with a student. Be encouraging and educational."""
+        
+        # Use Gemini orchestrator to analyze and refine the response
+        gemini_llm = GoogleGenAI(
+            model="models/gemini-2.0-flash",
+            api_key=os.getenv("GEMINI_API_KEY")
+        )
+        
+        print("🤖 Orchestrator analyzing code search results...")
+        final_response = await gemini_llm.acomplete(analysis_prompt)
+        
+        return str(final_response)
+        
+    except Exception as e:
+        return f"Error in code search: {str(e)}. Please try rephrasing your coding question."
+        
+        print("🤖 Orchestrator analyzing code search results...")
+        final_response = await gemini_llm.acomplete(analysis_prompt)
+        
+        return str(final_response)
+        
+    except Exception as e:
+        return f"Error in code search: {str(e)}. Please try rephrasing your coding question."
+
 # Conversation context to maintain chat history
 conversation_history = []
 
@@ -38,7 +217,7 @@ async def synthesize_final_answer(query: str, rag_result: str, web_result: str, 
             conversation_context = ""
             if conversation_history:
                 conversation_context = "\n💬 **Previous Conversation:**\n"
-                for i, exchange in enumerate(conversation_history[-10:], 1):  # Last 10 exchanges for context
+                for i, exchange in enumerate(conversation_history, 1):  
                     conversation_context += f"{i}. Student asked: \"{exchange['user']}\"\n"
                     conversation_context += f"   I responded: {exchange['assistant'][:2000]}{'...' if len(exchange['assistant']) > 2000 else ''}\n\n"
             
@@ -88,7 +267,7 @@ Please provide a helpful, human-like response that shows you understand the cont
             conversation_context = ""
             if conversation_history:
                 conversation_context = "\n💬 **Previous Conversation:**\n"
-                for i, exchange in enumerate(conversation_history[-10:], 1):  # Last 10 exchanges for context
+                for i, exchange in enumerate(conversation_history, 1):
                     conversation_context += f"{i}. Student asked: \"{exchange['user']}\"\n"
                     conversation_context += f"   I responded: {exchange['assistant'][:2000]}{'...' if len(exchange['assistant']) > 2000 else ''}\n\n"
             
@@ -135,7 +314,7 @@ Please provide a helpful, human-like response that shows you understand the cont
 """
         
         # Use Gemini for final synthesis
-        gemini_llm = Gemini(
+        gemini_llm = GoogleGenAI(
             model="models/gemini-2.0-flash",
             api_key=os.getenv("GEMINI_API_KEY")
         )
@@ -148,10 +327,6 @@ Please provide a helpful, human-like response that shows you understand the cont
             "assistant": str(final_response)
         })
         
-        # Keep only last 10 exchanges to prevent context overflow
-        if len(conversation_history) > 10:
-            conversation_history.pop(0)
-        
         # Debug: Show conversation history size
         print(f"💭 Conversation history: {len(conversation_history)} exchanges stored")
             
@@ -160,7 +335,7 @@ Please provide a helpful, human-like response that shows you understand the cont
         return f"Error synthesizing final answer: {str(e)}"
 
 async def main():
-    print("Enhanced Hybrid AI Assistant starting up...")
+    print("Recallr -Your AI Academic Assistant is starting up...")
     print("Initializing the pipeline...")
     
     # Initialize RAG pipeline first by making a dummy call to trigger index loading
@@ -182,34 +357,55 @@ async def main():
                 await print_conversation_summary()
                 continue
                 
-            print("Processing...")
+            print("🧠 Analyzing query for optimal routing...")
             
-            # Analyze if the query needs conversation context
-            context_analysis = await analyze_query_context_dependency(user_query, conversation_history)
-            if context_analysis.get('needs_context'):
-                print(f"🔄 Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}")
-                if context_analysis.get('recent_topics'):
-                    print(f"📝 Recent topics: {', '.join(context_analysis['recent_topics'][:3])}")
+            # Use orchestrator LLM to determine routing strategy
+            routing_analysis = await analyze_query_routing(user_query)
             
-            print("Searching documents...")
+            print(f"🎯 Routing decision: {routing_analysis['routing']} (confidence: {routing_analysis['confidence']:.2f})")
+            print(f"💡 Reasoning: {routing_analysis['reasoning']}")
             
-            # Get RAG results using the hybrid.py module
-            rag_result = await search_documents_with_context(user_query, conversation_history)
-            print("Document search complete")
-            
-            print("Searching web...")
-            # Get web search results using Groq directly (more reliable) with conversation context
-            web_result = await get_web_search_results(user_query, conversation_history)
-            print("Web search complete")
-            
-            print("Searching YouTube...")
-            # Get YouTube search results with conversation context
-            youtube_result = await get_youtube_search_results(user_query, conversation_history)
-            print("YouTube search complete")
-            
-            print("Synthesizing final answer...")
-            # Synthesize final answer using Gemini with all three sources
-            final_answer = await synthesize_final_answer(user_query, rag_result, web_result, youtube_result)
+            if routing_analysis['routing'] == 'CODE_SEARCH':
+                # Route to specialized code search assistant
+                print("🔍 Routing to specialized coding assistant...")
+                final_answer = await code_search_answer(user_query)
+                
+                # Update conversation history with final answer
+                conversation_history.append({
+                    "user": user_query,
+                    "assistant": final_answer
+                })
+                
+            else:
+                # Route to academic RAG pipeline (existing flow)
+                print("📚 Routing to academic knowledge pipeline...")
+                
+                # Analyze if the query needs conversation context
+                context_analysis = await analyze_query_context_dependency(user_query, conversation_history)
+                if context_analysis.get('needs_context'):
+                    print(f"🔄 Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}")
+                    if context_analysis.get('recent_topics'):
+                        print(f"📝 Recent topics: {', '.join(context_analysis['recent_topics'][:3])}")
+                
+                print("Searching documents...")
+                
+                # Get RAG results using the hybrid.py module
+                rag_result = await search_documents_with_context(user_query, conversation_history)
+                print("Document search complete")
+                
+                print("Searching web...")
+                # Get web search results using Groq directly (more reliable) with conversation context
+                web_result = await get_web_search_results(user_query, conversation_history)
+                print("Web search complete")
+                
+                print("Searching YouTube...")
+                # Get YouTube search results with conversation context
+                youtube_result = await get_youtube_search_results(user_query, conversation_history)
+                print("YouTube search complete")
+                
+                print("Synthesizing final answer...")
+                # Synthesize final answer using Gemini with all three sources
+                final_answer = await synthesize_final_answer(user_query, rag_result, web_result, youtube_result)
             
             print(f"\n{'='*50}")
             print("FINAL ANSWER:")
