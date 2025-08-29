@@ -6,6 +6,7 @@ import dotenv as env
 from typing import List, Dict, Any
 import json
 import groq as Groq
+from mistralai import Mistral
 
 env.load_dotenv()
 
@@ -64,6 +65,122 @@ def analyze_query_context_dependency(query: str) -> Dict[str, Any]:
         'context_indicators_found': found_indicators
     }
 
+def chat_with_mistral(user_prompt: str) -> str:
+    """Simple Mistral chat without web search or tool calling"""
+    try:
+        mistral_api_key = os.getenv("MISTRAL_API_KEY")
+        if not mistral_api_key:
+            print("Mistral API key not found, falling back to Gemini")
+            return chat_with_gemini(user_prompt)
+        
+        # Analyze context and build conversation context
+        context_analysis = analyze_query_context_dependency(user_prompt)
+        conversation_context = get_conversation_context()
+        
+        # Build enhanced prompt with context (same logic as Gemini)
+        if context_analysis['needs_context'] and conversation_context:
+            enhanced_prompt = f"""
+{conversation_context}
+
+Current user query: "{user_prompt}"
+
+Please provide a comprehensive answer that builds on our previous conversation.
+"""
+        else:
+            enhanced_prompt = user_prompt
+        
+        # Initialize Mistral client
+        try:
+            mistral_client = Mistral(api_key=mistral_api_key)
+            print("🤖 Using Mistral Codestral...")
+        except Exception as init_error:
+            print(f"Failed to initialize Mistral client: {init_error}")
+            return chat_with_gemini(user_prompt)
+        
+        # Mistral-specific system instruction (no web search references)
+        mistral_system_instruction = f'''
+You are Mistral Codestral, an expert coding assistant with deep knowledge in programming languages, frameworks, and software development best practices.
+
+{conversation_context}
+
+CORE CAPABILITIES:
+1. **Context Awareness**: If the user's question contains pronouns (it, this, that, they, etc.) or refers to previous topics, understand what they're referring to from our conversation history.
+2. **Code-First Approach**: Always provide practical, executable code examples with detailed explanations.
+3. **Best Practices**: Suggest modern coding patterns, optimization techniques, and industry standards.
+4. **Problem Solving**: Break down complex coding problems into manageable steps.
+5. **Multiple Solutions**: When applicable, provide different approaches (beginner vs advanced, different paradigms).
+6. **Debugging Help**: Identify potential issues and provide solutions for common coding problems.
+7. **Clear Documentation**: Include comments and explanations within code snippets.
+8. **Conversation Flow**: Reference previous topics when relevant and build naturally on our conversation.
+9. **Encouraging Tone**: Be supportive and help users learn through examples.
+
+SPECIALIZATIONS:
+- Algorithm design and data structures
+- API development and integration  
+- Database design and optimization
+- Frontend and backend development
+- Code review and refactoring
+- Performance optimization
+- Security best practices
+
+Remember: This is a continuing conversation, not a standalone question. Focus on providing accurate, well-structured code solutions.
+'''
+        
+        # Prepare messages for Mistral (simple chat without tools)
+        messages = [
+            {
+                "role": "system",
+                "content": mistral_system_instruction
+            },
+            {
+                "role": "user",
+                "content": enhanced_prompt
+            }
+        ]
+        
+        # Make API call to Mistral with comprehensive error handling
+        try:
+            response = mistral_client.chat.complete(
+                model="codestral-latest",
+                messages=messages,
+                temperature=0.3,
+                max_tokens=4000
+            )
+            
+            if response and response.choices and len(response.choices) > 0:
+                choice = response.choices[0]
+                mistral_response = choice.message.content
+                
+                if mistral_response and len(mistral_response.strip()) > 0:
+                    return mistral_response
+                else:
+                    print("Empty response from Mistral, falling back to Gemini")
+                    return chat_with_gemini(user_prompt)
+            else:
+                print("No valid response from Mistral, falling back to Gemini")
+                return chat_with_gemini(user_prompt)
+                
+        except Exception as mistral_error:
+            error_msg = str(mistral_error).lower()
+            
+            # Handle specific Mistral error types gracefully - never break the code
+            if any(code in error_msg for code in ["400", "401", "402", "403", "404", "429", "500", "502", "503"]):
+                print(f"Mistral API error ({mistral_error}), falling back to Gemini")
+                return chat_with_gemini(user_prompt)
+            elif any(issue in error_msg for issue in ["timeout", "connection", "network", "ssl"]):
+                print(f"Mistral connection error, falling back to Gemini")
+                return chat_with_gemini(user_prompt)
+            elif "rate limit" in error_msg or "quota" in error_msg:
+                print(f"Mistral rate limit exceeded, falling back to Gemini")
+                return chat_with_gemini(user_prompt)
+            else:
+                print(f"Unexpected Mistral error ({mistral_error}), falling back to Gemini")
+                return chat_with_gemini(user_prompt)
+        
+    except Exception as general_error:
+        print(f"General error in Mistral setup ({general_error}), falling back to Gemini")
+        return chat_with_gemini(user_prompt)
+
 def chat_with_gemini(user_prompt: str) -> str:
     """Main chat function using Gemini with conversation context and web search"""
     try:
@@ -97,23 +214,36 @@ Please provide a comprehensive answer that builds on our previous conversation.
             top_k=40,
             max_output_tokens=2000,
             system_instruction=f'''
-You are an expert coding assistant with 20+ years of hands-on experience. 
+You are Gemini, an expert coding assistant with real-time web search capabilities and 20+ years of hands-on experience.
 
 {conversation_context}
 
-INSTRUCTIONS:
+CORE CAPABILITIES & INSTRUCTIONS:
 1. **Context Awareness**: If the user's question contains pronouns (it, this, that, they, etc.) or refers to previous topics, understand what they're referring to from our conversation history.
 2. **Start with Examples**: Always begin by explaining the user query with a simple real-life example, then provide the solution.
-3. **Web Search**: Use web search to find the most current and relevant information from:
+3. **Real-Time Web Search**: Actively use web search to find the most current and relevant information from:
     - Stack Overflow, GitHub, official documentation
-    - GeeksforGeeks, CodeProject, programming blogs
+    - GeeksforGeeks, CodeProject, programming blogs  
     - Community forums and Q&A sites
-4. **Clear Formatting**: Provide well-formatted code snippets with explanations.
-5. **Simple Explanations**: Break down complex concepts with examples.
-6. **Conversation Flow**: Reference previous topics when relevant and build naturally on our conversation.
-7. **Encouraging Tone**: Be warm and supportive.
+    - Latest framework updates and version-specific information
+4. **Current Information**: Always verify information is up-to-date using web search, especially for:
+    - API changes and deprecations
+    - New library versions and features
+    - Best practices and security updates
+    - Framework-specific solutions
+5. **Clear Formatting**: Provide well-formatted code snippets with explanations.
+6. **Simple Explanations**: Break down complex concepts with examples.
+7. **Conversation Flow**: Reference previous topics when relevant and build naturally on our conversation.
+8. **Encouraging Tone**: Be warm and supportive.
+9. **Source Citations**: When using web search results, mention the source or reference.
 
-Remember: This is a continuing conversation, not a standalone question.
+SEARCH STRATEGY:
+- Search for current solutions and examples
+- Verify code syntax and compatibility
+- Find community-recommended approaches
+- Check for recent updates or changes
+
+Remember: This is a continuing conversation, not a standalone question. Use your web search capabilities to provide the most accurate and current information.
 '''
         )
         
@@ -131,6 +261,90 @@ Remember: This is a continuing conversation, not a standalone question.
             
     except Exception as e:
         return f"Error: {str(e)}"
+
+def get_dual_responses(user_prompt: str) -> Dict[str, str]:
+    """Get responses from both Mistral and Gemini models"""
+    responses = {
+        "mistral": None,
+        "gemini": None,
+        "primary": None  # The response that will be added to conversation context
+    }
+    
+    try:
+        # Try Mistral first
+        print("🤖 Getting response from Mistral Codestral...")
+        mistral_response = chat_with_mistral(user_prompt)
+        
+        if mistral_response and "Error:" not in mistral_response and len(mistral_response.strip()) > 0:
+            responses["mistral"] = mistral_response
+            responses["primary"] = mistral_response  # Use Mistral as primary if successful
+            print("✅ Mistral response obtained")
+        else:
+            print("❌ Mistral response failed or empty")
+    except Exception as e:
+        print(f"❌ Mistral error: {e}")
+    
+    try:
+        # Always get Gemini response as well
+        print("🌐 Getting response from Gemini with web search...")
+        gemini_response = chat_with_gemini(user_prompt)
+        
+        if gemini_response and "Error:" not in gemini_response and len(gemini_response.strip()) > 0:
+            responses["gemini"] = gemini_response
+            print("✅ Gemini response obtained")
+            
+            # If Mistral failed, use Gemini as primary
+            if not responses["primary"]:
+                responses["primary"] = gemini_response
+        else:
+            print("❌ Gemini response failed or empty")
+    except Exception as e:
+        print(f"❌ Gemini error: {e}")
+    
+    # Fallback if both failed
+    if not responses["primary"]:
+        responses["primary"] = "Sorry, both AI models are currently unavailable. Please try again later."
+    
+    return responses
+
+def save_dual_responses_to_file(user_query: str, responses: Dict[str, str]):
+    """Save conversation with both Mistral and Gemini responses"""
+    try:
+        output_filename = "code_results_answer.txt"
+        with open(output_filename, "w", encoding="utf-8") as f:
+            f.write(f"=== DUAL AI CODE SEARCH CONVERSATION LOG ===\n\n")
+            
+            # Write full conversation history
+            exchange_count = 0
+            for i in range(0, len(messages_context), 2):
+                if i+1 < len(messages_context):
+                    exchange_count += 1
+                    f.write(f"[Exchange {exchange_count}]\n")
+                    f.write(f"USER: {messages_context[i]['content']}\n\n")
+                    f.write(f"PRIMARY RESPONSE: {messages_context[i+1]['content']}\n\n")
+                    f.write("-" * 60 + "\n\n")
+            
+            # Add current exchange with both responses
+            if responses.get("mistral") or responses.get("gemini"):
+                f.write(f"[Current Exchange - Dual Responses]\n")
+                f.write(f"USER: {user_query}\n\n")
+                
+                if responses.get("mistral"):
+                    f.write("🤖 MISTRAL CODESTRAL RESPONSE:\n")
+                    f.write(f"{responses['mistral']}\n\n")
+                    f.write("-" * 40 + "\n\n")
+                
+                if responses.get("gemini"):
+                    f.write("🌐 GEMINI (WITH WEB SEARCH) RESPONSE:\n")
+                    f.write(f"{responses['gemini']}\n\n")
+                    f.write("-" * 40 + "\n\n")
+            
+            f.write("=" * 60 + "\n")
+            f.write("END OF CONVERSATION\n")
+        
+        print(f"✅ Dual responses saved to '{output_filename}'")
+    except Exception as e:
+        print(f"Error saving dual responses: {e}")
 
 def save_conversation_to_file(user_query: str, ai_response: str):
     """Save the conversation exchange to a file"""
@@ -240,26 +454,34 @@ def main():
             if context_analysis['needs_context'] and len(messages_context) > 1:
                 print(f"🔍 Detected context dependency: {', '.join(context_analysis['context_indicators_found'])}")
             
-            print("🔄 Processing your query with conversation context and web search...")
+            print("🔄 Getting responses from both Mistral and Gemini...")
             
             try:
-                # Get AI response
-                answer = chat_with_gemini(user_prompt)
+                # Get responses from both AI models
+                responses = get_dual_responses(user_prompt)
                 
-                # Add AI response to conversation
-                add_ai_message(answer)
+                # Add primary response to conversation context
+                add_ai_message(responses["primary"])
                 
-                # Display response
+                # Display responses
                 print(f"\n{'='*60}")
-                print("🤖 ASSISTANT:")
-                print(f"{'='*60}")
-                print(answer)
-                print(f"{'='*60}")
                 
-                # Save conversation to file
-                save_conversation_to_file(user_prompt, answer)
+                if responses.get("mistral"):
+                    print("🤖 MISTRAL CODESTRAL:")
+                    print(f"{'='*60}")
+                    print(responses["mistral"])
+                    print(f"{'='*60}\n")
                 
-                print(f"💾 Conversation: {len(messages_context)//2} exchanges stored")
+                if responses.get("gemini"):
+                    print("🌐 GEMINI (WITH WEB SEARCH):")
+                    print(f"{'='*60}")
+                    print(responses["gemini"])
+                    print(f"{'='*60}")
+                
+                # Save dual responses to file
+                save_dual_responses_to_file(user_prompt, responses)
+                
+                print(f"💾 Dual responses saved | Conversation: {len(messages_context)//2} exchanges stored")
                 
             except Exception as e:
                 print(f"Error getting response: {e}")
