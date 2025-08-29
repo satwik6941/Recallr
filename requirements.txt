@@ -29,6 +29,7 @@ transformers
 sentence-transformers
 nltk
 rank-bm25
+mistralai
 
 # File processing
 python-magic
@@ -37,6 +38,3 @@ docx2txt
 
 # Logging and monitoring
 structlog
-
-# Web crawling
-crawl4ai
