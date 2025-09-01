@@ -13,11 +13,19 @@ from llama_index.embeddings.gemini import GeminiEmbedding
 from llama_index.core.node_parser import SimpleNodeParser
 from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.llms.groq import Groq
+import asyncio
 import os
 import requests
 import sys
 from typing import List, Dict, Any
 from dotenv import load_dotenv
+from transformers import AutoTokenizer
+from pathlib import Path
+import fitz
+import re
+import json
+
+from youtube import process_youtube_query
 
 load_dotenv()
 
@@ -123,7 +131,7 @@ async def search_documents_with_messages(query: str, messages: List[Dict] = None
     
     # Initialize if not already done
     if hybrid_query_engine is None:
-        initialize_rag_pipeline()
+        await initialize_rag_pipeline()
     
     try:
         # Build context-aware query using message structure
@@ -287,8 +295,6 @@ Provide only the reformulated search query:"""
         # Import and use the external youtube module
         sys.path.append(os.path.dirname(__file__))
         
-        from youtube import process_youtube_query
-        
         # Get YouTube search results from external module
         youtube_results = await process_youtube_query(search_query)
         
@@ -450,7 +456,7 @@ async def get_web_search_results(query: str, conversation_history: List[Dict] = 
         if conversation_history and len(conversation_history) > 0:
             # Get recent conversation context
             recent_context = ""
-            for exchange in conversation_history:  # Last 3 exchanges
+            for exchange in conversation_history:  
                 recent_context += f"User asked: {exchange['user']}\nAssistant answered: {exchange['assistant'][:300]}...\n\n"
             
             # Create an enhanced query that resolves references
@@ -611,12 +617,161 @@ Please provide a clear summary highlighting the most relevant videos for learnin
     except Exception as e:
         return f"Error getting YouTube search results: {str(e)}"
 
-def initialize_rag_pipeline():
-    """Initialize the RAG pipeline with hybrid retrieval"""
+def tokeniser():
+    """Enhanced tokenizer function with PDF text extraction and preprocessing"""
+    path = Path("data")
+
+    def extract_text(file):
+        """Extract text from various file formats including PDF"""
+        file_path = Path(file)
+        
+        if file_path.suffix.lower() == '.pdf':
+            # Load PDF using PyMuPDF
+            load_pdf = fitz.open(str(file_path))
+            # Extract text from each page
+            documents = [page.get_text() for page in load_pdf]
+            # Combine all pages into one text
+            full_text = "\n".join(documents)
+            load_pdf.close()  # Close the PDF file
+            return full_text
+        else:
+            # For other file types, you can add more extraction logic here
+            # For now, try to read as plain text
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            except Exception as e:
+                print(f"Could not read file {file_path}: {e}")
+                return ""
+
+    def preprocess_text(text):
+        """Preprocessing function to clean and normalize text"""
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', '', text)
+        return text.split() 
+
+    # Initialize tokenizer
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    token_dict = {}
+    
+    # Process all files in the data directory
+    for file in path.iterdir():
+        if file.is_file():  # Only process files, not directories
+            try:
+                # Extract text from the file
+                text = extract_text(file)
+                
+                if text.strip():  # Only process non-empty text
+                    # Preprocess the text
+                    preprocessed_tokens = preprocess_text(text)
+                    
+                    # Encode using BERT tokenizer
+                    # Join preprocessed tokens back to string for BERT tokenizer
+                    preprocessed_text = " ".join(preprocessed_tokens)
+                    tokens = tokenizer.encode(preprocessed_text, truncation=False)
+                    
+                    # Store both token count and preprocessed tokens for BM25
+                    token_dict[file] = {
+                        'token_count': len(tokens),
+                        'bert_tokens': tokens,
+                        'preprocessed_tokens': preprocessed_tokens,
+                        'raw_text': text
+                    }
+                    
+                    print(f"Processed {file.name}: {len(tokens)} BERT tokens, {len(preprocessed_tokens)} preprocessed tokens")
+                else:
+                    print(f"Warning: No text extracted from {file.name}")
+                    
+            except Exception as e:
+                print(f"Error processing file {file}: {e}")
+                continue
+
+    return token_dict
+
+async def groqllm_token_output():
+    """Get optimal chunking strategy from Groq LLM and return only combined values"""
+    try:
+        token_dictionary = tokeniser()
+        
+        # Format the token dictionary for better readability
+        formatted_dict = {}
+        for file_path, data in token_dictionary.items():
+            filename = file_path.name if hasattr(file_path, 'name') else str(file_path)
+            formatted_dict[filename] = {
+                'token_count': data['token_count'],
+                'text_length': len(data['raw_text'])
+            }
+        
+        prompt = f"""
+You are a document chunking strategist. Given the following token counts for user-uploaded files:
+{formatted_dict}
+
+Analyze all files and provide ONLY the optimal combined chunk size and overlap for all PDFs together.
+
+Consider:
+- Total token distribution across all files
+- Recommended chunk size (typically 500-2000 tokens)
+- Overlap size (typically 10-20% of chunk size)
+
+Return ONLY a JSON object in this exact format:
+{{"chunk_size": 1000, "overlap": 200}}
+"""
+        
+        response = await groq_llm.acomplete(prompt)
+        response_text = str(response).strip()
+        
+        # Try to parse the JSON response
+        try:
+            # Extract JSON from response
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+            if start_idx != -1 and end_idx != 0:
+                json_text = response_text[start_idx:end_idx]
+                parsed_response = json.loads(json_text)
+                return parsed_response
+            else:
+                raise ValueError("No JSON found in response")
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"Failed to parse JSON response: {e}")
+            print(f"Raw response: {response_text}")
+            # Return default values
+            return {"chunk_size": 1000, "overlap": 200}
+            
+    except Exception as e:
+        print(f"Error in groqllm_token_output: {e}")
+        # Return default values on error
+        return {"chunk_size": 1000, "overlap": 200}
+
+async def initialize_rag_pipeline():
+    """Initialize the RAG pipeline with hybrid retrieval using AI-optimized chunking"""
     global vector_index, keyword_index, hybrid_query_engine, nodes
     
     # Initialize Gemini settings first
     initialize_gemini_settings()
+    
+    # Get optimal chunking strategy
+    print("🧠 Analyzing documents and determining optimal chunking strategy...")
+    chunking_params = await groqllm_token_output()
+    
+    # Debug: Show what AI actually recommended
+    print(f"🤖 AI Analysis Result: {chunking_params}")
+    
+    # Extract chunking parameters
+    optimal_chunk_size = chunking_params.get("chunk_size", 1000)
+    optimal_overlap = chunking_params.get("overlap", 200)
+    
+    print(f"📊 Using AI-optimized chunking: chunk_size={optimal_chunk_size}, overlap={optimal_overlap}")
+    
+    # Show whether we used AI recommendations or defaults
+    if chunking_params.get("chunk_size") is not None:
+        print("✅ Using AI-recommended chunk size")
+    else:
+        print("⚠️ Using default chunk size (AI analysis may have failed)")
+    
+    if chunking_params.get("overlap") is not None:
+        print("✅ Using AI-recommended overlap")
+    else:
+        print("⚠️ Using default overlap (AI analysis may have failed)")
     
     # Try to load existing storage, otherwise create new indexes
     storage_dir = "storage"
@@ -630,13 +785,14 @@ def initialize_rag_pipeline():
         print(f"Error loading documents: {e}")
         raise
 
-    # Parse documents into nodes for BM25 with proper chunking
-    print("Parsing documents into nodes with chunking...")
+    # Parse documents into nodes for BM25 with AI-optimized chunking
+    print(f"Parsing documents into nodes with AI-optimized chunking...")
     parser = SimpleNodeParser.from_defaults(
-        chunk_size=1000,  # Smaller chunks for better retrieval
-        chunk_overlap=200,  # Some overlap to maintain context
+        chunk_size=optimal_chunk_size,  # AI-recommended chunk size
+        chunk_overlap=optimal_overlap,  # AI-recommended overlap
     )
     nodes = parser.get_nodes_from_documents(documents)
+    print(f"Created {len(nodes)} nodes with optimal chunking strategy")
     
     # Try to load existing indexes
     try:
@@ -672,12 +828,12 @@ def initialize_rag_pipeline():
             
             # If either index failed to load, recreate the missing ones
             if vector_index is None or keyword_index is None:
-                print("🔄 Recreating missing indexes...")
+                print("🔄 Recreating missing indexes with AI-optimized chunking...")
                 if vector_index is None:
-                    print("Creating new vector index...")
+                    print("Creating new vector index with optimal chunks...")
                     vector_index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
                 if keyword_index is None:
-                    print("Creating new keyword index...")
+                    print("Creating new keyword index with optimal chunks...")
                     keyword_index = SimpleKeywordTableIndex(nodes)
                 
                 # Save the newly created indexes
@@ -696,17 +852,17 @@ def initialize_rag_pipeline():
             raise Exception("Storage directory or index_store.json not found")
         
     except Exception as e:
-        print(f"Could not load from storage ({e}), creating new indexes...")
+        print(f"Could not load from storage ({e}), creating new indexes with AI-optimized chunking...")
         
-        print("Creating new indexes from scratch...")
-        # Create vector store index from nodes (with chunking)
+        print("Creating new indexes from scratch with AI-optimized chunking...")
+        # Create vector store index from nodes (with optimal chunking)
         vector_index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
         
         # Create keyword table index from nodes
         keyword_index = SimpleKeywordTableIndex(nodes)
         
         # Save indexes to storage with improved error handling
-        print("Saving new indexes to storage...")
+        print("Saving new AI-optimized indexes to storage...")
         try:
             # Ensure storage directory exists
             os.makedirs(storage_dir, exist_ok=True)
@@ -718,12 +874,12 @@ def initialize_rag_pipeline():
             # Save each index separately for better error handling
             vector_index.storage_context.persist(persist_dir=storage_dir)
             keyword_index.storage_context.persist(persist_dir=storage_dir)
-            print("Successfully saved indexes to storage.")
+            print("Successfully saved AI-optimized indexes to storage.")
         except Exception as save_error:
             print(f"Warning: Could not save indexes to storage: {save_error}")
             print("Indexes created in memory, will need to recreate on next run.")
 
-    print("Creating retrievers...")
+    print("Creating retrievers with AI-optimized chunk strategy...")
     # Create retrievers with smaller top_k to reduce context size
     vector_retriever = vector_index.as_retriever(similarity_top_k=3)
     keyword_retriever = keyword_index.as_retriever(similarity_top_k=3)
@@ -770,7 +926,8 @@ def initialize_rag_pipeline():
         llm=Settings.llm,
     )
 
-    print("RAG pipeline initialized successfully!")
+    print(f"🎉 RAG pipeline initialized successfully with AI-optimized chunking!")
+    print(f"📊 Final chunking parameters: chunk_size={optimal_chunk_size}, overlap={optimal_overlap}")
     return hybrid_query_engine
 
 async def search_documents_with_context(query: str, conversation_history: List[Dict] = None) -> str:
@@ -787,7 +944,7 @@ async def search_documents_with_context(query: str, conversation_history: List[D
     
     # Initialize if not already done
     if hybrid_query_engine is None:
-        initialize_rag_pipeline()
+        await initialize_rag_pipeline()
     
     try:
         # Build context-aware query
@@ -843,12 +1000,12 @@ Answer the question: {query}
     except Exception as e:
         return f"Error searching documents: {str(e)}"
 
-def get_rag_query_engine():
+async def get_rag_query_engine():
     """Get the initialized RAG query engine"""
     global hybrid_query_engine
     
     if hybrid_query_engine is None:
-        initialize_rag_pipeline()
+        await initialize_rag_pipeline()
     
     return hybrid_query_engine
 
@@ -896,5 +1053,8 @@ def get_groq_llm():
 # Initialize the pipeline when the module is imported
 if __name__ == "__main__":
     # Only initialize if run directly
-    initialize_rag_pipeline()
-    print("RAG pipeline ready for use!")
+    async def main():
+        await initialize_rag_pipeline()
+        print("RAG pipeline ready for use!")
+    
+    asyncio.run(main())

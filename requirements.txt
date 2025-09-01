@@ -11,7 +11,7 @@ python-cors
 llama-index
 llama-index-core
 llama-index-embeddings-huggingface
-llama-index-llms-gemini
+llama-index-llms-google-genai
 llama-index-llms-groq
 llama-index-retrievers-bm25
 
