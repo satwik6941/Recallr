@@ -5,13 +5,17 @@ from typing import List, Dict, Any
 from dotenv import load_dotenv
 from llama_index.llms.google_genai import GoogleGenAI
 
-# Import the RAG pipeline and search functions from hybrid.py
 from hybrid import (
     search_documents_with_context, 
     analyze_query_context_dependency,
     get_web_search_results,
     get_youtube_search_results
-)
+)    
+
+from code_search import chat_with_gemini, add_user_message, add_ai_message, save_conversation_to_file
+import time
+import os
+from datetime import datetime
 
 load_dotenv()
 
@@ -24,6 +28,55 @@ youtube_api_key = os.getenv("YOUTUBE_API_KEY")
 if not youtube_api_key:
     print("Warning: YOUTUBE_API_KEY not found. YouTube search functionality will be limited.")
 
+# Conversation history file path
+CONVERSATION_FILE = "conversation_history.txt"
+
+def save_conversation_history():
+    """Save the entire conversation history to a text file"""
+    try:
+        with open(CONVERSATION_FILE, "w", encoding="utf-8") as f:
+            f.write(f"=== Recallr Conversation History ===\n")
+            f.write(f"Session started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Total exchanges: {len(conversation_history)}\n")
+            f.write("=" * 50 + "\n\n")
+            
+            for i, exchange in enumerate(conversation_history, 1):
+                f.write(f"Exchange {i}:\n")
+                f.write(f"Timestamp: {exchange.get('timestamp', 'N/A')}\n")
+                f.write(f"User: {exchange['user']}\n")
+                f.write(f"Assistant: {exchange['assistant']}\n")
+                f.write("-" * 30 + "\n\n")
+        
+        print(f"💾 Conversation saved to {CONVERSATION_FILE}")
+    except Exception as e:
+        print(f"⚠️ Error saving conversation: {str(e)}")
+
+def load_conversation_history():
+    """Load conversation history from file if it exists"""
+    global conversation_history
+    try:
+        if os.path.exists(CONVERSATION_FILE):
+            # For now, we'll start fresh each session
+            # You can implement parsing logic here if needed
+            print(f"📁 Found existing conversation file: {CONVERSATION_FILE}")
+            return True
+        return False
+    except Exception as e:
+        print(f"⚠️ Error loading conversation: {str(e)}")
+        return False
+
+def add_to_conversation_history(user_query: str, assistant_response: str):
+    """Add an exchange to conversation history and save to file"""
+    exchange = {
+        "user": user_query,
+        "assistant": assistant_response,
+        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    conversation_history.append(exchange)
+    
+    # Save to file after each exchange
+    save_conversation_history()
+
 async def analyze_query_routing(query: str) -> Dict[str, Any]:
     """Use orchestrator LLM to analyze query and determine routing strategy"""
     try:
@@ -31,7 +84,7 @@ async def analyze_query_routing(query: str) -> Dict[str, Any]:
         conversation_context = ""
         if conversation_history:
             conversation_context = "\n💬 **Recent Conversation Context:**\n"
-            for i, exchange in enumerate(conversation_history[-3:], 1):  # Last 3 exchanges for context
+            for i, exchange in enumerate(conversation_history, 1):  # Last 3 exchanges for context
                 conversation_context += f"{i}. User: \"{exchange['user']}\"\n"
                 conversation_context += f"   Assistant: {exchange['assistant'][:200]}{'...' if len(exchange['assistant']) > 200 else ''}\n\n"
 
@@ -117,11 +170,6 @@ async def code_search_answer(query: str) -> str:
     try:
         print("🔍 Detected coding query - routing to specialized code assistant...")
         
-        # Import the required functions from code_search.py
-        from code_search import chat_with_gemini, add_user_message, add_ai_message, save_conversation_to_file
-        import time
-        import os
-        
         # Add user message to code search context
         add_user_message(query)
         
@@ -204,6 +252,52 @@ Remember: This is part of an ongoing conversation with a student. Be encouraging
 
 # Conversation context to maintain chat history
 conversation_history = []
+
+def save_conversation_history():
+    """Save the entire conversation history to a text file"""
+    try:
+        with open(CONVERSATION_FILE, "w", encoding="utf-8") as f:
+            f.write(f"=== Recallr Conversation History ===\n")
+            f.write(f"Session started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Total exchanges: {len(conversation_history)}\n")
+            f.write("=" * 50 + "\n\n")
+            
+            for i, exchange in enumerate(conversation_history, 1):
+                f.write(f"Exchange {i}:\n")
+                f.write(f"Timestamp: {exchange.get('timestamp', 'N/A')}\n")
+                f.write(f"User: {exchange['user']}\n")
+                f.write(f"Assistant: {exchange['assistant']}\n")
+                f.write("-" * 30 + "\n\n")
+        
+        print(f"💾 Conversation saved to {CONVERSATION_FILE}")
+    except Exception as e:
+        print(f"⚠️ Error saving conversation: {str(e)}")
+
+def load_conversation_history():
+    """Load conversation history from file if it exists"""
+    global conversation_history
+    try:
+        if os.path.exists(CONVERSATION_FILE):
+            # For now, we'll start fresh each session
+            # You can implement parsing logic here if needed
+            print(f"📁 Found existing conversation file: {CONVERSATION_FILE}")
+            return True
+        return False
+    except Exception as e:
+        print(f"⚠️ Error loading conversation: {str(e)}")
+        return False
+
+def add_to_conversation_history(user_query: str, assistant_response: str):
+    """Add an exchange to conversation history and save to file"""
+    exchange = {
+        "user": user_query,
+        "assistant": assistant_response,
+        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    conversation_history.append(exchange)
+    
+    # Save to file after each exchange
+    save_conversation_history()
 
 async def synthesize_final_answer(query: str, rag_result: str, web_result: str, youtube_result: str = None) -> str:
     """Synthesize final answer from RAG, web search, and YouTube results"""
@@ -321,12 +415,6 @@ Please provide a helpful, human-like response that shows you understand the cont
         
         final_response = await gemini_llm.acomplete(synthesis_prompt)
         
-        # Update conversation history with final answer
-        conversation_history.append({
-            "user": query,
-            "assistant": str(final_response)
-        })
-        
         # Debug: Show conversation history size
         print(f"💭 Conversation history: {len(conversation_history)} exchanges stored")
             
@@ -337,6 +425,9 @@ Please provide a helpful, human-like response that shows you understand the cont
 async def main():
     print("Recallr -Your AI Academic Assistant is starting up...")
     print("Initializing the pipeline...")
+    
+    # Load existing conversation history
+    load_conversation_history()
     
     # Initialize RAG pipeline first by making a dummy call to trigger index loading
     try:
@@ -370,11 +461,8 @@ async def main():
                 print("🔍 Routing to specialized coding assistant...")
                 final_answer = await code_search_answer(user_query)
                 
-                # Update conversation history with final answer
-                conversation_history.append({
-                    "user": user_query,
-                    "assistant": final_answer
-                })
+                # Add to conversation history and save to file
+                add_to_conversation_history(user_query, final_answer)
                 
             else:
                 # Route to academic RAG pipeline (existing flow)
@@ -406,6 +494,9 @@ async def main():
                 print("Synthesizing final answer...")
                 # Synthesize final answer using Gemini with all three sources
                 final_answer = await synthesize_final_answer(user_query, rag_result, web_result, youtube_result)
+                
+                # Add to conversation history and save to file
+                add_to_conversation_history(user_query, final_answer)
             
             print(f"\n{'='*50}")
             print("FINAL ANSWER:")
@@ -468,7 +559,7 @@ Summary:"""
         print(f"Error generating summary: {str(e)}")
         # Fallback to the original format if LLM fails
         print(f"\n📖 **Conversation Summary** ({len(conversation_history)} exchanges):")
-        for i, exchange in enumerate(conversation_history[-10:], 1):  # Show last 10
+        for i, exchange in enumerate(conversation_history, 1):  # Show all exchanges
             print(f"  {i}. User: {exchange['user'][:60]}{'...' if len(exchange['user']) > 60 else ''}")
             print(f"     Bot: {exchange['assistant'][:800]}{'...' if len(exchange['assistant']) > 800 else ''}")
         print()
