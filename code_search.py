@@ -330,12 +330,12 @@ def save_dual_responses_to_file(user_query: str, responses: Dict[str, str]):
                 f.write(f"USER: {user_query}\n\n")
                 
                 if responses.get("mistral"):
-                    f.write("🤖 MISTRAL CODESTRAL RESPONSE:\n")
+                    f.write("🤖 MISTRAL RESPONSE:\n")
                     f.write(f"{responses['mistral']}\n\n")
                     f.write("-" * 40 + "\n\n")
                 
                 if responses.get("gemini"):
-                    f.write("🌐 GEMINI (WITH WEB SEARCH) RESPONSE:\n")
+                    f.write("🌐 GEMINI RESPONSE:\n")
                     f.write(f"{responses['gemini']}\n\n")
                     f.write("-" * 40 + "\n\n")
             
@@ -467,13 +467,13 @@ def main():
                 print(f"\n{'='*60}")
                 
                 if responses.get("mistral"):
-                    print("🤖 MISTRAL CODESTRAL:")
+                    print("🤖 MISTRAL: ")
                     print(f"{'='*60}")
                     print(responses["mistral"])
                     print(f"{'='*60}\n")
                 
                 if responses.get("gemini"):
-                    print("🌐 GEMINI (WITH WEB SEARCH):")
+                    print("🌐 GEMINI: ")
                     print(f"{'='*60}")
                     print(responses["gemini"])
                     print(f"{'='*60}")

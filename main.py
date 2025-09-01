@@ -173,16 +173,18 @@ async def code_search_answer(query: str) -> str:
         # Add user message to code search context
         add_user_message(query)
         
-        # Get response from code search assistant
-        print("🤖 Getting response from code search assistant...")
-        code_response = chat_with_gemini(query)
+        # Get responses from both models instead of just one
+        print("🤖 Getting responses from both Mistral and Gemini...")
+        from code_search import get_dual_responses, save_dual_responses_to_file
         
-        # Add AI response to code search context
-        add_ai_message(code_response)
+        responses = get_dual_responses(query)
         
-        # Explicitly save conversation to file
-        print("💾 Saving conversation to file...")
-        save_conversation_to_file(query, code_response)
+        # Add primary response to code search context
+        add_ai_message(responses["primary"])
+        
+        # Save both responses to the same file
+        print("💾 Saving dual responses to file...")
+        save_dual_responses_to_file(query, responses)
         
         # Wait a moment for file to be written
         time.sleep(0.5)
@@ -209,22 +211,24 @@ async def code_search_answer(query: str) -> str:
         # If file reading failed, use direct response
         if not output_content:
             print("⚠️ Could not read output file, using direct response")
-            output_content = f"USER: {query}\\n\\nASSISTANT: {code_response}"
+            output_content = f"USER: {query}\\n\\nASSISTANT: {responses['primary']}"
         
         # Analyze the code search results with the orchestrator LLM
         analysis_prompt = f"""You are an expert coding assistant who has 20+ years of experience in analyzing and providing coding assistance results.
 
 Original user query: "{query}"
 
-Code search assistant response and conversation log:
+Code search assistant response and conversation log (includes both Mistral and Gemini responses):
 {output_content}
 
 Please provide a final, polished answer that:
 1. Directly addresses the user's coding question
 2. Maintains the conversational tone from our ongoing session
-3. Includes any relevant code examples or explanations from the code search results
-4. Builds on our previous conversation if relevant
-5. Is clear, concise, and helpful for a student learning to code
+3. Synthesizes the best parts from both AI responses when available
+4. Includes any relevant code examples or explanations from the code search results
+5. Builds on our previous conversation if relevant
+6. Is clear, concise, and helpful for a student learning to code
+7. If both responses are available, combine their strengths into a comprehensive answer
 
 Remember: This is part of an ongoing conversation with a student. Be encouraging and educational."""
         
@@ -234,15 +238,7 @@ Remember: This is part of an ongoing conversation with a student. Be encouraging
             api_key=os.getenv("GEMINI_API_KEY")
         )
         
-        print("🤖 Orchestrator analyzing code search results...")
-        final_response = await gemini_llm.acomplete(analysis_prompt)
-        
-        return str(final_response)
-        
-    except Exception as e:
-        return f"Error in code search: {str(e)}. Please try rephrasing your coding question."
-        
-        print("🤖 Orchestrator analyzing code search results...")
+        print("🤖 Orchestrator analyzing both AI responses...")
         final_response = await gemini_llm.acomplete(analysis_prompt)
         
         return str(final_response)
