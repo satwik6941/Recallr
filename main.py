@@ -1,7 +1,7 @@
 import asyncio
 import os
 import json
-from typing import List, Dict, Any
+from typing import Dict, Any
 from dotenv import load_dotenv
 from llama_index.llms.google_genai import GoogleGenAI
 
@@ -12,7 +12,8 @@ from hybrid import (
     get_youtube_search_results
 )    
 
-from code_search import chat_with_gemini, add_user_message, add_ai_message, save_conversation_to_file
+from code_search import add_user_message as code_add_user_message, add_ai_message as code_add_ai_message, get_dual_responses as code_get_dual_responses, save_dual_responses_to_file as code_save_dual_responses_to_file
+from math_search import add_user_message as math_add_user_message, add_ai_message as math_add_ai_message, get_dual_responses as math_get_dual_responses, save_dual_responses_to_file as math_save_dual_responses_to_file
 import time
 import os
 from datetime import datetime
@@ -89,30 +90,67 @@ async def analyze_query_routing(query: str) -> Dict[str, Any]:
                 conversation_context += f"   Assistant: {exchange['assistant'][:200]}{'...' if len(exchange['assistant']) > 200 else ''}\n\n"
 
         routing_prompt = f"""
-You are an intelligent query router for an AI academic assistant. Analyze the user's query and determine the best routing strategy.
+You are an intelligent query router for an AI academic assistant that serves students from kindergarten to M-Tech level. Analyze the user's query and determine the best routing strategy.
 
 {conversation_context}
 
 Current user query: "{query}"
 
-Available routing options:
-1. CODE_SEARCH - For programming, coding, software development, debugging, algorithms, data structures, specific programming languages, frameworks, libraries, APIs, etc.
-2. ACADEMIC_RAG - For academic subjects, study materials, course content, general knowledge, research topics, etc.
+**Available routing options:**
 
-Instructions:
-- Analyze the query carefully considering the conversation context
-- If the query is about programming, coding, software development, debugging, or any technical coding topic, route to CODE_SEARCH
-- If the query is about academic subjects, study materials, or general knowledge, route to ACADEMIC_RAG
-- Consider context - if previous messages were about coding and current query uses pronouns like "it", "this", "that", it might be coding-related
+1. **MATH_SEARCH** - For ALL mathematics-related queries across ALL educational levels:
+   **Elementary (K-5):** Basic arithmetic, counting, shapes, simple addition/subtraction
+   **Middle School (6-8):** Fractions, decimals, basic algebra, geometry, percentages
+   **High School (9-12):** Advanced algebra, trigonometry, calculus, statistics, coordinate geometry
+   **Engineering (B-Tech/M-Tech):** Advanced calculus, differential equations, linear algebra, discrete math, numerical methods, Applied Mathematics, Statistics and Probability, Operations Research
+
+   **Math Keywords to detect:** numbers, equations, solve, calculate, formula, theorem, proof, derivative, integral, matrix, probability, statistics, geometry, algebra, calculus, trigonometry, arithmetic, mathematical, math problem, step-by-step solution
+
+2. **CODE_SEARCH** - For ALL programming and computer science queries:
+   **Beginner:** Scratch, basic programming concepts, logic building
+   **School Level:** Python basics, simple algorithms, basic coding
+   **Engineering:** Advanced programming, data structures, algorithms, software development, debugging, frameworks, APIs, databases, web development, machine learning code
+   
+   **Programming Keywords to detect:** code, programming, python, java, javascript, C++, algorithm, function, variable, loop, array, debugging, software, app, website, database, API, framework, git, coding
+
+3. **ACADEMIC_RAG** - For ALL other academic subjects and general knowledge:
+   **All Levels:** Science (physics, chemistry, biology), social studies, history, geography, literature, languages, engineering subjects (non-coding), research topics, study materials, course content, general knowledge
+   
+   **Academic Keywords to detect:** science, physics, chemistry, biology, history, geography, literature, essay, theory, concept, explain, definition, study, course, subject
+
+**SMART ROUTING RULES:**
+
+**Priority System:**
+1. **Mathematics FIRST:** If query relates to numbers, mathematical operations, mathematical concepts (basic to advanced), equations, formulas, or asks for calculations/mathematical solutions or doubts/queries → MATH_SEARCH
+2. **Programming SECOND:** If query relates to coding, programming languages, software development, or technical implementation or any kinds of doubts/queries → CODE_SEARCH
+3. **Academic THIRD:** All other educational content, theories, concepts, general knowledge → ACADEMIC_RAG
+
+**Level-Adaptive Detection:**
+- **Simple Math:** "What is 2+2?" or "How to add fractions?" → MATH_SEARCH
+- **Advanced Math:** "Solve differential equation" or "Find derivative of sin(x)" → MATH_SEARCH
+- **Basic Programming:** "How to print in Python?" → CODE_SEARCH
+- **Advanced Programming:** "Implement binary search tree" → CODE_SEARCH
+- **Science Concepts:** "What is photosynthesis?" → ACADEMIC_RAG
+- **Engineering Theory:** "Explain thermodynamics" → ACADEMIC_RAG
+
+**Context Consideration:**
+- If previous conversation was about math and current query uses pronouns ("solve this", "what about it"), likely MATH_SEARCH
+- If previous conversation was about coding and current query references ("debug this", "how to fix it"), likely CODE_SEARCH
+- Consider educational level from context
+
+**Edge Cases:**
+- "Mathematical algorithms" → Focus on implementation = CODE_SEARCH, Focus on theory = MATH_SEARCH
+- "Statistics in Python" → Implementation = CODE_SEARCH, Mathematical concepts = MATH_SEARCH
+- "Physics equations" → MATH_SEARCH (if solving), ACADEMIC_RAG (if explaining concepts)
 
 Respond with ONLY a JSON object in this exact format:
 {{
-    "routing": "CODE_SEARCH_OR_ACADEMIC_RAG",
-    "confidence": 0.8,
-    "reasoning": "brief explanation of why this routing was chosen"
+    "routing": "MATH_SEARCH_OR_CODE_SEARCH_OR_ACADEMIC_RAG",
+    "confidence": 0.85,
+    "reasoning": "brief explanation including detected educational level and key indicators"
 }}
 
-Where routing should be either "CODE_SEARCH" or "ACADEMIC_RAG".
+Where routing should be either "MATH_SEARCH" or "CODE_SEARCH" or "ACADEMIC_RAG".
 """
 
         # Use Gemini orchestrator for routing decision
@@ -127,7 +165,6 @@ Where routing should be either "CODE_SEARCH" or "ACADEMIC_RAG".
         # Parse JSON response
         try:
             # Extract JSON from response if it's wrapped in other text
-            import json
             if '{' in routing_text and '}' in routing_text:
                 json_start = routing_text.find('{')
                 json_end = routing_text.rfind('}') + 1
@@ -165,26 +202,125 @@ Where routing should be either "CODE_SEARCH" or "ACADEMIC_RAG".
             'raw_response': ''
         }
 
+async def math_search_answer(query: str) -> str:
+    """Handle math-related queries using math_search.py"""
+    try:
+        print("� Detected math query - routing to specialized mathematics assistant...")
+        
+        # Add user message to math search context
+        math_add_user_message(query)
+        
+        # Get responses from both models instead of just one
+        print("🤖 Getting responses from both Mistral and Gemini...")
+        
+        responses = math_get_dual_responses(query)
+        
+        # Add primary response to math search context
+        math_add_ai_message(responses["primary"])
+        
+        # Save both responses to the same file
+        print("💾 Saving dual responses to file...")
+        math_save_dual_responses_to_file(query, responses)
+        
+        # Wait a moment for file to be written
+        time.sleep(0.5)
+        
+        # Read the output file to get the complete conversation
+        output_content = ""
+        output_file_path = "math_results_answer.txt"
+        
+        # Try to read the file with multiple attempts
+        for attempt in range(3):
+            try:
+                if os.path.exists(output_file_path):
+                    with open(output_file_path, "r", encoding="utf-8") as f:
+                        output_content = f.read()
+                    print("✅ Successfully read output file")
+                    break
+                else:
+                    print(f"⚠️ Attempt {attempt + 1}: Output file not found, waiting...")
+                    time.sleep(1)
+            except Exception as file_error:
+                print(f"⚠️ Attempt {attempt + 1}: Error reading file: {file_error}")
+                time.sleep(1)
+        
+        # If file reading failed, use direct response
+        if not output_content:
+            print("⚠️ Could not read output file, using direct response")
+            output_content = f"USER: {query}\\n\\nASSISTANT: {responses['primary']}"
+        
+        # Analyze the code search results with the orchestrator LLM
+        analysis_prompt = f"""You are an expert mathematics tutor with 20+ years of experience in teaching and analyzing mathematical concepts. You have extraordinary teaching methods, numerous publications, and prestigious awards in mathematics education.
+
+Original user query: "{query}"
+
+Math search assistant response and conversation log (includes both Mistral and Gemini responses):
+{output_content}
+
+Please provide a final, polished answer that:
+1. **Directly addresses the user's mathematics question** with step-by-step solutions
+2. **Maintains the conversational tone** from our ongoing session
+3. **Synthesizes the best parts** from both AI responses when available
+4. **Breaks down complex problems** into 3-5 manageable steps with clear explanations
+5. **Provides real-world examples** that students can relate to (sports, social media, daily life)
+6. **Connects mathematical concepts** to previously discussed topics when relevant
+7. **Uses simple, encouraging language** before introducing mathematical terminology
+8. **Shows the reasoning** behind each mathematical step, not just the procedure
+9. **Includes visual descriptions** of graphs, patterns, or geometric concepts when helpful
+10. **Builds confidence** through supportive, student-friendly explanations
+
+STUDENT-FOCUSED APPROACH:
+- Start with a relatable real-world example when possible
+- Explain WHY each step is necessary, not just HOW to do it
+- Use encouraging language like "Great question!", "Let's tackle this together"
+- Break complex concepts into digestible pieces
+- Connect new learning to previous mathematical knowledge
+- Show multiple solution methods when applicable
+- Verify answers and explain if the result makes sense
+
+MATHEMATICAL COMMUNICATION STYLE:
+- Use clear, step-by-step formatting
+- Explain mathematical reasoning and logic
+- Provide context for when and why to use specific methods
+- Include encouraging remarks about the learning process
+- Make abstract concepts concrete through examples
+- Build mathematical confidence and understanding
+
+Remember: This is part of an ongoing conversation with a student learning mathematics. Be encouraging, educational, and focus on building deep mathematical understanding rather than just providing answers."""
+        
+        # Use Gemini orchestrator to analyze and refine the response
+        gemini_llm = GoogleGenAI(
+            model="models/gemini-2.0-flash",
+            api_key=os.getenv("GEMINI_API_KEY")
+        )
+        
+        print("🤖 Orchestrator analyzing both AI responses...")
+        final_response = await gemini_llm.acomplete(analysis_prompt)
+        
+        return str(final_response)
+        
+    except Exception as e:
+        return f"Error in math search: {str(e)}. Please try rephrasing your mathematics question."
+
 async def code_search_answer(query: str) -> str:
     """Handle coding-related queries using code_search.py"""
     try:
         print("🔍 Detected coding query - routing to specialized code assistant...")
         
         # Add user message to code search context
-        add_user_message(query)
+        code_add_user_message(query)
         
         # Get responses from both models instead of just one
         print("🤖 Getting responses from both Mistral and Gemini...")
-        from code_search import get_dual_responses, save_dual_responses_to_file
         
-        responses = get_dual_responses(query)
+        responses = code_get_dual_responses(query)
         
         # Add primary response to code search context
-        add_ai_message(responses["primary"])
+        code_add_ai_message(responses["primary"])
         
         # Save both responses to the same file
         print("💾 Saving dual responses to file...")
-        save_dual_responses_to_file(query, responses)
+        code_save_dual_responses_to_file(query, responses)
         
         # Wait a moment for file to be written
         time.sleep(0.5)
@@ -338,9 +474,8 @@ Please respond naturally and conversationally, keeping in mind our previous conv
 4. Use simple, everyday language that's easy to understand
 5. Combine information from the sources when helpful
 6. Be concise and focused on what the student actually asked
-7. Only recommend YouTube videos if the student specifically asked for videos, tutorials, visual explanations, or similar requests
-8. If recommending videos, include the exact URLs and format as: "Video Title" - Watch here: [URL]
-9. **Make connections**: If this question relates to something we talked about before, explicitly mention that connection
+7. If the student is just checking their understanding or asking a doubt, simply confirm or clarify
+8. **Make connections**: If this question relates to something we talked about before, explicitly mention that connection
 
 Remember:
 - Be warm and encouraging in your tone
@@ -456,6 +591,14 @@ async def main():
                 # Route to specialized code search assistant
                 print("🔍 Routing to specialized coding assistant...")
                 final_answer = await code_search_answer(user_query)
+                
+                # Add to conversation history and save to file
+                add_to_conversation_history(user_query, final_answer)
+                
+            elif routing_analysis['routing'] == 'MATH_SEARCH':
+                # Route to specialized math search assistant
+                print("🔢 Routing to specialized mathematics assistant...")
+                final_answer = await math_search_answer(user_query)
                 
                 # Add to conversation history and save to file
                 add_to_conversation_history(user_query, final_answer)

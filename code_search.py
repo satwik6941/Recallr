@@ -99,7 +99,7 @@ Please provide a comprehensive answer that builds on our previous conversation.
         
         # Mistral-specific system instruction (no web search references)
         mistral_system_instruction = f'''
-You are Mistral Codestral, an expert coding assistant with deep knowledge in programming languages, frameworks, and software development best practices.
+You are Mistral Codestral, an expert coding assistant with 20+ years of deep knowledge in programming languages, frameworks, and software development best practices.
 
 {conversation_context}
 
