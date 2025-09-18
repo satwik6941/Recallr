@@ -14,9 +14,11 @@ from hybrid import (
 
 from code_search import add_user_message as code_add_user_message, add_ai_message as code_add_ai_message, get_dual_responses as code_get_dual_responses, save_dual_responses_to_file as code_save_dual_responses_to_file
 from math_search import add_user_message as math_add_user_message, add_ai_message as math_add_ai_message, get_dual_responses as math_get_dual_responses, save_dual_responses_to_file as math_save_dual_responses_to_file
+from doc_processing import get_system_prompt_with_caching
 import time
 import os
 from datetime import datetime
+from pathlib import Path
 
 load_dotenv()
 
@@ -31,6 +33,9 @@ if not youtube_api_key:
 
 # Conversation history file path
 CONVERSATION_FILE = "conversation_history.txt"
+
+# Global variable to store the academic system prompt
+ACADEMIC_SYSTEM_PROMPT = None
 
 def save_conversation_history():
     """Save the entire conversation history to a text file"""
@@ -385,6 +390,20 @@ Remember: This is part of an ongoing conversation with a student. Be encouraging
 # Conversation context to maintain chat history
 conversation_history = []
 
+async def refresh_academic_system_prompt():
+    """Manually refresh the academic system prompt by re-checking PDF collection"""
+    global ACADEMIC_SYSTEM_PROMPT
+    
+    try:
+        print("🔄 Refreshing Academic System Prompt...")
+        data_path = Path('data')
+        ACADEMIC_SYSTEM_PROMPT = get_system_prompt_with_caching(data_path)
+        print("✅ Academic System Prompt refreshed successfully!")
+        return True
+    except Exception as e:
+        print(f"⚠️ Error refreshing Academic System Prompt: {e}")
+        return False
+
 def save_conversation_history():
     """Save the entire conversation history to a text file"""
     try:
@@ -433,6 +452,8 @@ def add_to_conversation_history(user_query: str, assistant_response: str):
 
 async def synthesize_final_answer(query: str, rag_result: str, web_result: str, youtube_result: str = None) -> str:
     """Synthesize final answer from RAG, web search, and YouTube results"""
+    global ACADEMIC_SYSTEM_PROMPT
+    
     try:
         if youtube_result:
             # Check if user is specifically asking for videos
@@ -448,7 +469,7 @@ async def synthesize_final_answer(query: str, rag_result: str, web_result: str, 
                     conversation_context += f"   I responded: {exchange['assistant'][:2000]}{'...' if len(exchange['assistant']) > 2000 else ''}\n\n"
             
             synthesis_prompt = f"""
-You are a friendly and knowledgeable tutor helping a student understand concepts. Think of yourself as talking to a real person who needs clear, helpful explanations.
+{ACADEMIC_SYSTEM_PROMPT if ACADEMIC_SYSTEM_PROMPT else "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."}
 
 This is a continuing conversation. Here's our recent chat history:
 {conversation_context}
@@ -497,7 +518,7 @@ Please provide a helpful, human-like response that shows you understand the cont
                     conversation_context += f"   I responded: {exchange['assistant'][:2000]}{'...' if len(exchange['assistant']) > 2000 else ''}\n\n"
             
             synthesis_prompt = f"""
-You are a friendly and knowledgeable tutor helping a student understand concepts. Think of yourself as talking to a real person who needs clear, helpful explanations.
+{ACADEMIC_SYSTEM_PROMPT if ACADEMIC_SYSTEM_PROMPT else "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."}
 
 This is a continuing conversation. Here's our recent chat history:
 {conversation_context}
@@ -554,11 +575,24 @@ Please provide a helpful, human-like response that shows you understand the cont
         return f"Error synthesizing final answer: {str(e)}"
 
 async def main():
+    global ACADEMIC_SYSTEM_PROMPT
+    
     print("Recallr -Your AI Academic Assistant is starting up...")
     print("Initializing the pipeline...")
     
     # Load existing conversation history
     load_conversation_history()
+    
+    # Initialize Academic System Prompt with smart caching
+    print("📚 Initializing Academic System Prompt...")
+    try:
+        data_path = Path('data')
+        ACADEMIC_SYSTEM_PROMPT = get_system_prompt_with_caching(data_path)
+        print("✅ Academic System Prompt initialized successfully!")
+    except Exception as e:
+        print(f"⚠️ Warning: Academic System Prompt initialization failed: {e}")
+        ACADEMIC_SYSTEM_PROMPT = "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."
+        print("Using default academic system prompt...")
     
     # Initialize RAG pipeline first by making a dummy call to trigger index loading
     try:
@@ -571,12 +605,15 @@ async def main():
     
     while True:
         try:
-            user_query = input("\nEnter your query (or 'quit'/'summary' for options): ")
+            user_query = input("\nEnter your query (or 'quit'/'summary'/'refresh' for options): ")
             if user_query.lower() in ['quit', 'exit', 'q']:
                 print("Happy Learning!")
                 break
             elif user_query.lower() == 'summary':
                 await print_conversation_summary()
+                continue
+            elif user_query.lower() in ['refresh', 'reload']:
+                await refresh_academic_system_prompt()
                 continue
                 
             print("🧠 Analyzing query for optimal routing...")
