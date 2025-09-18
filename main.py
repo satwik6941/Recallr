@@ -14,7 +14,7 @@ from hybrid import (
 
 from code_search import add_user_message as code_add_user_message, add_ai_message as code_add_ai_message, get_dual_responses as code_get_dual_responses, save_dual_responses_to_file as code_save_dual_responses_to_file
 from math_search import add_user_message as math_add_user_message, add_ai_message as math_add_ai_message, get_dual_responses as math_get_dual_responses, save_dual_responses_to_file as math_save_dual_responses_to_file
-from doc_processing import get_system_prompt_with_caching
+from doc_processing import get_system_prompt_with_caching, has_pdf_collection_changed
 import time
 import os
 from datetime import datetime
@@ -404,6 +404,47 @@ async def refresh_academic_system_prompt():
         print(f"⚠️ Error refreshing Academic System Prompt: {e}")
         return False
 
+async def check_and_update_documents():
+    """Check for document changes and update system prompt if needed"""
+    global ACADEMIC_SYSTEM_PROMPT
+    
+    try:
+        data_path = Path('data')
+        
+        # Check if PDF collection has changed
+        if has_pdf_collection_changed(data_path):
+            print("📚 Document collection updated - refreshing academic knowledge...")
+            
+            # Get current PDF files for comparison
+            from doc_processing import get_current_pdf_files, load_cached_pdf_list
+            current_pdfs = get_current_pdf_files(data_path)
+            cached_pdfs = load_cached_pdf_list()
+            
+            # Show what changed
+            added = set(current_pdfs) - set(cached_pdfs) if cached_pdfs else set(current_pdfs)
+            removed = set(cached_pdfs) - set(current_pdfs) if cached_pdfs else set()
+            
+            change_info = []
+            if added:
+                change_info.append(f"Added: {len(added)} file(s)")
+            if removed:
+                change_info.append(f"Removed: {len(removed)} file(s)")
+            
+            if change_info:
+                print(f"📋 Changes detected: {', '.join(change_info)}")
+            
+            # Update the system prompt
+            ACADEMIC_SYSTEM_PROMPT = get_system_prompt_with_caching(data_path)
+            
+            print("✅ Academic knowledge updated! Your conversation will now reflect the latest documents.")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"⚠️ Error checking document changes: {e}")
+        return False
+
 def save_conversation_history():
     """Save the entire conversation history to a text file"""
     try:
@@ -616,6 +657,9 @@ async def main():
                 await refresh_academic_system_prompt()
                 continue
                 
+            # ✨ AUTO-CHECK: Check for document changes before processing each query
+            documents_updated = await check_and_update_documents()
+            
             print("🧠 Analyzing query for optimal routing...")
             
             # Use orchestrator LLM to determine routing strategy
