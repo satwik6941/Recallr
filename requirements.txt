@@ -1,16 +1,8 @@
-# Core FastAPI dependencies
-fastapi
-uvicorn[standard]
-python-multipart
-pydantic
-
-# CORS support
-python-cors
-
 # Existing dependencies from hybrid.py
 llama-index
 llama-index-core
 llama-index-embeddings-huggingface
+llama-index-embeddings-gemini
 llama-index-llms-google-genai
 llama-index-llms-groq
 llama-index-retrievers-bm25
@@ -34,7 +26,17 @@ mistralai
 # File processing
 python-magic
 PyPDF2
+PyMuPDF
 docx2txt
 
 # Logging and monitoring
 structlog
+
+# CLI dependencies
+typer[all]
+rich
+click
+
+# Additional Gemini dependencies for CLI
+google-genai
+groq
