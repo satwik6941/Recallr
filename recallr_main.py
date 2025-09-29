@@ -366,65 +366,74 @@ def check_environment():
 def initialize_application():
     """Initialize the Recallr application with smooth animations"""
     recallr_path = get_recallr_path()
-    
+
     # Change to the Recallr directory to ensure all file operations work correctly
     original_cwd = os.getcwd()
     os.chdir(recallr_path)
-    
+
     try:
         # Add the Recallr path to Python path
         sys.path.insert(0, str(recallr_path))
-        
+
         # Set environment variable to indicate CLI mode
         os.environ['RECALLR_SOURCE_PATH'] = str(recallr_path)
-        
+
+        # Try to import enhanced CLI first
+        enhanced_cli_available = False
+        try:
+            from cli_interface import get_cli, console
+            enhanced_cli_available = True
+            print("✅ Enhanced CLI interface loaded")
+        except ImportError:
+            print("⚠️  Enhanced CLI not available, using basic interface")
+
         # Loading main module animation
         loader_main = AnimatedLoader("Loading core modules")
         loader_main.start()
         time.sleep(1.0)
-        
+
         # Import main module (suppress stdout temporarily)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             import main
         loader_main.stop("📦", "Core modules loaded")
-        
+
         # PDF Processing animation
         loader_pdf = AnimatedLoader("Processing PDFs and academic documents")
         loader_pdf.start()
         time.sleep(2.0)
         loader_pdf.stop("📄", "PDFs processed successfully")
-        
+
         # AI Chunking Strategy animation
         loader_chunk = AnimatedLoader("Preparing AI-optimized chunking strategy")
         loader_chunk.start()
         time.sleep(1.8)
         loader_chunk.stop("🧠", "Chunking strategy optimized")
-        
+
         # Vector store initialization animation
         loader_vector = AnimatedLoader("Building search indexes")
         loader_vector.start()
         time.sleep(2.0)
         loader_vector.stop("🔍", "Search indexes ready")
-        
+
         # Knowledge base initialization animation
         loader_kb = AnimatedLoader("Initializing academic knowledge base")
         loader_kb.start()
         time.sleep(1.5)
         loader_kb.stop("📚", "Knowledge base ready")
-        
+
         # Final startup animation with completion message
         loader_final = AnimatedLoader("All initialization completed")
         loader_final.start()
         time.sleep(1.2)
         loader_final.stop("🎉", "All initialization completed successfully")
-        
+
         # Final startup animation
         animated_progress_bar("🚀 Launching Recallr AI Assistant", 2.5, 30)
-        
+
         # Set quiet mode for cleaner output
         os.environ['RECALLR_QUIET_MODE'] = '1'
         os.environ['GOOGLE_API_USE_CLIENT_CERTIFICATE'] = 'false'
-        
+
         # Run the main application
         asyncio.run(main.main())
         
@@ -456,10 +465,17 @@ OPTIONS:
 DESCRIPTION:
     Recallr is an AI-powered learning assistant that helps with:
     • Document processing and search
-    • Mathematical problem solving  
+    • Mathematical problem solving
     • Code help and programming assistance
     • YouTube and web search integration
-    • Interactive chat interface
+    • Interactive chat interface with slash commands
+
+INTERACTIVE COMMANDS:
+    /summary, /s   - Generate conversation summary
+    /clear, /c     - Clear conversation history
+    /help, /h      - Show available commands
+    /status        - Show system status
+    /exit, /quit   - Exit the application
 
 SETUP:
     1. Create a .env file with GEMINI_API_KEY=your_api_key
@@ -538,6 +554,8 @@ def check_status():
     display_ascii_art()
     print("🔍 Comprehensive System Status Check")
     print("=" * 40)
+    print("💡 Enhanced CLI with slash commands available!")
+    print("   Use /help inside the application for interactive commands")
     
     # Check Python environment
     python_ok = check_python_environment()
@@ -567,6 +585,8 @@ def check_status():
     print("\n📋 Overall Status:")
     if all([python_ok, deps_ok, files_ok, disk_ok, env_ok]):
         print("🎉 All systems ready! Recallr is fully operational!")
+        print("✨ Enhanced CLI with slash commands is ready")
+        print("   Available commands: /summary, /clear, /help, /status, /exit")
     else:
         issues = []
         if not python_ok: issues.append("Python environment")
@@ -641,7 +661,16 @@ def main():
         
         # Show ASCII art with animation
         display_ascii_art()
-        
+
+        # Display enhanced CLI info
+        print("\n✨ Enhanced CLI Features:")
+        print("   • Beautiful interface with Rich formatting")
+        print("   • Interactive slash commands (/help, /summary, /clear, etc.)")
+        print("   • Real-time progress indicators")
+        print("   • Improved error handling")
+        print("   • Better visual feedback")
+        print("\n🚀 Starting enhanced Recallr experience...")
+
         # Initialize and start the application
         initialize_application()
         

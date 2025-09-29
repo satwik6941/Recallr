@@ -5,6 +5,14 @@ from typing import Dict, Any
 from dotenv import load_dotenv
 from llama_index.llms.google_genai import GoogleGenAI
 
+# Import enhanced CLI interface
+try:
+    from cli_interface import get_cli, console
+    CLI_ENHANCED = True
+except ImportError:
+    CLI_ENHANCED = False
+    console = None
+
 from hybrid import (
     search_documents_with_context, 
     analyze_query_context_dependency,
@@ -621,35 +629,71 @@ Please provide a helpful, human-like response that shows you understand the cont
 
 async def main():
     global ACADEMIC_SYSTEM_PROMPT
-    
+
     # Suppress verbose output during initialization
     import warnings
     warnings.filterwarnings("ignore")
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
-    
+
+    # Initialize enhanced CLI if available
+    cli = None
+    if CLI_ENHANCED:
+        cli = get_cli()
+        # Set up context functions for slash commands
+        cli.set_context_function('summary_function', print_conversation_summary)
+        cli.set_context_function('clear_function', lambda: conversation_history.clear())
+
+        # Display welcome message
+        cli.display_welcome()
+    else:
+        print("🤖 Recallr - AI-Powered Learning Assistant")
+        print("Commands: 'quit', 'summary', 'refresh'")
+        print("-" * 60)
+
     # Load existing conversation history (silent)
     load_conversation_history()
-    
+
     # Initialize Academic System Prompt with smart caching (silent)
     try:
         data_path = Path('data')
         ACADEMIC_SYSTEM_PROMPT = get_system_prompt_with_caching(data_path)
     except Exception as e:
         ACADEMIC_SYSTEM_PROMPT = "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."
-    
+
     # Initialize RAG pipeline first by making a dummy call to trigger index loading (silent)
     try:
         # This will initialize all the indexes (vector, keyword, BM25) upfront
         await search_documents_with_context("initialization", [])
     except Exception as e:
         pass  # Continue with web search and YouTube only
-    
+
     while True:
         try:
-            user_query = input("\nEnter your query (or 'quit'/'summary'/'refresh' for options): ")
+            # Get user input using enhanced CLI or fallback
+            if CLI_ENHANCED:
+                user_query = await cli.get_user_input()
+            else:
+                user_query = input("\nEnter your query (or 'quit'/'summary'/'refresh' for options): ")
+
+            if not user_query.strip():
+                continue
+
+            # Handle slash commands with enhanced CLI
+            if CLI_ENHANCED and user_query.startswith('/'):
+                command, args = cli.parse_command(user_query)
+                if command:
+                    should_continue = await cli.handle_command(command, args)
+                    if not should_continue:
+                        break
+                    continue
+
+            # Handle legacy commands
             if user_query.lower() in ['quit', 'exit', 'q']:
-                print("Happy Learning!")
+                if CLI_ENHANCED:
+                    cli.display_info("👋 Goodbye! Thanks for using Recallr!", "success")
+                else:
+                    print("Happy Learning!")
                 break
             elif user_query.lower() == 'summary':
                 await print_conversation_summary()
@@ -658,87 +702,149 @@ async def main():
                 await refresh_academic_system_prompt()
                 continue
                 
+            # Update conversation history in CLI
+            if CLI_ENHANCED:
+                cli.update_conversation_history(conversation_history)
+
             # ✨ AUTO-CHECK: Check for document changes before processing each query
             documents_updated = await check_and_update_documents()
-            
-            print("🧠 Analyzing query for optimal routing...")
-            
+
+            if CLI_ENHANCED:
+                cli.display_info("🧠 Analyzing query for optimal routing...", "info")
+            else:
+                print("🧠 Analyzing query for optimal routing...")
+
             # Use orchestrator LLM to determine routing strategy
             routing_analysis = await analyze_query_routing(user_query)
-            
-            print(f"🎯 Routing decision: {routing_analysis['routing']} (confidence: {routing_analysis['confidence']:.2f})")
-            if not is_quiet_mode() or not ('failed' in routing_analysis['reasoning'].lower() or 'unavailable' in routing_analysis['reasoning'].lower()):
-                print(f"💡 Reasoning: {routing_analysis['reasoning']}")
+
+            # Display routing feedback with enhanced CLI
+            if CLI_ENHANCED:
+                cli.display_query_feedback(user_query, routing_analysis)
+            else:
+                print(f"🎯 Routing decision: {routing_analysis['routing']} (confidence: {routing_analysis['confidence']:.2f})")
+                if not is_quiet_mode() or not ('failed' in routing_analysis['reasoning'].lower() or 'unavailable' in routing_analysis['reasoning'].lower()):
+                    print(f"💡 Reasoning: {routing_analysis['reasoning']}")
             
             if routing_analysis['routing'] == 'CODE_SEARCH':
                 # Route to specialized code search assistant
-                print("🔍 Routing to specialized coding assistant...")
+                if CLI_ENHANCED:
+                    cli.display_info("🔍 Routing to specialized coding assistant...", "info")
+                else:
+                    print("🔍 Routing to specialized coding assistant...")
                 final_answer = await code_search_answer(user_query)
-                
+
                 # Add to conversation history and save to file
                 add_to_conversation_history(user_query, final_answer)
-                
+
             elif routing_analysis['routing'] == 'MATH_SEARCH':
                 # Route to specialized math search assistant
-                print("🔢 Routing to specialized mathematics assistant...")
+                if CLI_ENHANCED:
+                    cli.display_info("🔢 Routing to specialized mathematics assistant...", "info")
+                else:
+                    print("🔢 Routing to specialized mathematics assistant...")
                 final_answer = await math_search_answer(user_query)
-                
+
                 # Add to conversation history and save to file
                 add_to_conversation_history(user_query, final_answer)
                 
             else:
                 # Route to academic RAG pipeline (existing flow)
-                print("📚 Routing to academic knowledge pipeline...")
-                
+                if CLI_ENHANCED:
+                    cli.display_info("📚 Routing to academic knowledge pipeline...", "info")
+                else:
+                    print("📚 Routing to academic knowledge pipeline...")
+
                 # Analyze if the query needs conversation context
                 context_analysis = await analyze_query_context_dependency(user_query, conversation_history)
                 if context_analysis.get('needs_context'):
-                    print(f"🔄 Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}")
-                    if context_analysis.get('recent_topics'):
-                        print(f"📝 Recent topics: {', '.join(context_analysis['recent_topics'][:3])}")
-                
-                print("Searching documents...")
-                
-                # Get RAG results using the hybrid.py module
-                rag_result = await search_documents_with_context(user_query, conversation_history)
-                print("Document search complete")
-                
-                print("Searching web...")
-                # Get web search results using Groq directly (more reliable) with conversation context
-                web_result = await get_web_search_results(user_query, conversation_history)
-                print("Web search complete")
-                
-                print("Searching YouTube...")
-                # Get YouTube search results with conversation context
-                youtube_result = await get_youtube_search_results(user_query, conversation_history)
-                print("YouTube search complete")
-                
-                print("Synthesizing final answer...")
-                # Synthesize final answer using Gemini with all three sources
-                final_answer = await synthesize_final_answer(user_query, rag_result, web_result, youtube_result)
-                
+                    if CLI_ENHANCED:
+                        cli.display_info(f"🔄 Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}", "info")
+                        if context_analysis.get('recent_topics'):
+                            cli.display_info(f"📝 Recent topics: {', '.join(context_analysis['recent_topics'][:3])}", "info")
+                    else:
+                        print(f"🔄 Detected context dependency: {', '.join(context_analysis.get('context_indicators_found', []))}")
+                        if context_analysis.get('recent_topics'):
+                            print(f"📝 Recent topics: {', '.join(context_analysis['recent_topics'][:3])}")
+
+                # Show progress with enhanced CLI
+                if CLI_ENHANCED:
+                    with cli.show_loading("Searching documents...") as progress:
+                        if progress:
+                            task = progress.add_task("Searching documents...", total=None)
+                        # Get RAG results using the hybrid.py module
+                        rag_result = await search_documents_with_context(user_query, conversation_history)
+
+                        if progress:
+                            progress.update(task, description="Searching web...")
+                        # Get web search results
+                        web_result = await get_web_search_results(user_query, conversation_history)
+
+                        if progress:
+                            progress.update(task, description="Searching YouTube...")
+                        # Get YouTube search results
+                        youtube_result = await get_youtube_search_results(user_query, conversation_history)
+
+                        if progress:
+                            progress.update(task, description="Synthesizing final answer...")
+                        # Synthesize final answer
+                        final_answer = await synthesize_final_answer(user_query, rag_result, web_result, youtube_result)
+                else:
+                    print("Searching documents...")
+                    rag_result = await search_documents_with_context(user_query, conversation_history)
+                    print("Document search complete")
+
+                    print("Searching web...")
+                    web_result = await get_web_search_results(user_query, conversation_history)
+                    print("Web search complete")
+
+                    print("Searching YouTube...")
+                    youtube_result = await get_youtube_search_results(user_query, conversation_history)
+                    print("YouTube search complete")
+
+                    print("Synthesizing final answer...")
+                    final_answer = await synthesize_final_answer(user_query, rag_result, web_result, youtube_result)
+
                 # Add to conversation history and save to file
                 add_to_conversation_history(user_query, final_answer)
             
-            print(f"\n{'='*50}")
-            print("FINAL ANSWER:")
-            print(f"{'='*50}")
-            print(final_answer)
-            print(f"{'='*50}")
+            # Display final answer with enhanced formatting
+            if CLI_ENHANCED:
+                cli.display_response(final_answer, "Assistant")
+            else:
+                print(f"\n{'='*50}")
+                print("FINAL ANSWER:")
+                print(f"{'='*50}")
+                print(final_answer)
+                print(f"{'='*50}")
             
         except KeyboardInterrupt:
-            print("\nExiting...")
-            print("Happy learning!")
+            if CLI_ENHANCED:
+                cli.display_info("\n👋 Goodbye! Thanks for using Recallr!", "success")
+            else:
+                print("\nExiting...")
+                print("Happy learning!")
             break
         except Exception as e:
-            print(f"Error: {str(e)}")
+            if CLI_ENHANCED:
+                cli.display_error(str(e))
+            else:
+                print(f"Error: {str(e)}")
             # Fallback to just RAG search
             try:
-                print("Trying fallback to document search only...")
+                if CLI_ENHANCED:
+                    cli.display_info("Trying fallback to document search only...", "warning")
+                else:
+                    print("Trying fallback to document search only...")
                 result = await search_documents_with_context(user_query, conversation_history)
-                print(f"Fallback result: {result}")
+                if CLI_ENHANCED:
+                    cli.display_response(result, "Fallback Assistant")
+                else:
+                    print(f"Fallback result: {result}")
             except Exception as fallback_error:
-                print(f"All methods failed: {fallback_error}")
+                if CLI_ENHANCED:
+                    cli.display_error(f"All methods failed: {fallback_error}")
+                else:
+                    print(f"All methods failed: {fallback_error}")
 
 async def print_conversation_summary():
     """Print an AI-generated summary of the current conversation"""
