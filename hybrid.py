@@ -29,6 +29,10 @@ from youtube import process_youtube_query
 
 load_dotenv()
 
+def is_quiet_mode():
+    """Check if we're in quiet mode for cleaner output"""
+    return os.getenv('RECALLR_QUIET_MODE', '0') == '1'
+
 # Validate API keys
 if not os.getenv("GEMINI_1_API_KEY"):
     raise ValueError("GEMINI_1_API_KEY environment variable is required")
@@ -678,12 +682,15 @@ def tokeniser():
                         'raw_text': text
                     }
                     
-                    print(f"Processed {file.name}: {len(tokens)} BERT tokens, {len(preprocessed_tokens)} preprocessed tokens")
+                    if not is_quiet_mode():
+                        print(f"Processed {file.name}: {len(tokens)} BERT tokens, {len(preprocessed_tokens)} preprocessed tokens")
                 else:
-                    print(f"Warning: No text extracted from {file.name}")
+                    if not is_quiet_mode():
+                        print(f"Warning: No text extracted from {file.name}")
                     
             except Exception as e:
-                print(f"Error processing file {file}: {e}")
+                if not is_quiet_mode():
+                    print(f"Error processing file {file}: {e}")
                 continue
 
     return token_dict
@@ -732,13 +739,15 @@ Return ONLY a JSON object in this exact format:
             else:
                 raise ValueError("No JSON found in response")
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Failed to parse JSON response: {e}")
-            print(f"Raw response: {response_text}")
+            if not is_quiet_mode():
+                print(f"Failed to parse JSON response: {e}")
+                print(f"Raw response: {response_text}")
             # Return default values
             return {"chunk_size": 1000, "overlap": 200}
             
     except Exception as e:
-        print(f"Error in groqllm_token_output: {e}")
+        if not is_quiet_mode():
+            print(f"Error in groqllm_token_output: {e}")
         # Return default values on error
         return {"chunk_size": 1000, "overlap": 200}
 
@@ -750,53 +759,62 @@ async def initialize_rag_pipeline():
     initialize_gemini_settings()
     
     # Get optimal chunking strategy
-    print("🧠 Analyzing documents and determining optimal chunking strategy...")
+    if not is_quiet_mode():
+        print("🧠 Analyzing documents and determining optimal chunking strategy...")
     chunking_params = await groqllm_token_output()
     
-    # Debug: Show what AI actually recommended
-    print(f"🤖 AI Analysis Result: {chunking_params}")
+    # Debug: Show what AI actually recommended (only in non-quiet mode)
+    if not is_quiet_mode():
+        print(f"🤖 AI Analysis Result: {chunking_params}")
     
     # Extract chunking parameters
     optimal_chunk_size = chunking_params.get("chunk_size", 1000)
     optimal_overlap = chunking_params.get("overlap", 200)
     
-    print(f"📊 Using AI-optimized chunking: chunk_size={optimal_chunk_size}, overlap={optimal_overlap}")
-    
-    # Show whether we used AI recommendations or defaults
-    if chunking_params.get("chunk_size") is not None:
-        print("✅ Using AI-recommended chunk size")
-    else:
-        print("⚠️ Using default chunk size (AI analysis may have failed)")
-    
-    if chunking_params.get("overlap") is not None:
-        print("✅ Using AI-recommended overlap")
-    else:
-        print("⚠️ Using default overlap (AI analysis may have failed)")
+    if not is_quiet_mode():
+        print(f"📊 Using AI-optimized chunking: chunk_size={optimal_chunk_size}, overlap={optimal_overlap}")
+        
+        # Show whether we used AI recommendations or defaults
+        if chunking_params.get("chunk_size") is not None:
+            print("✅ Using AI-recommended chunk size")
+        else:
+            print("⚠️ Using default chunk size (AI analysis may have failed)")
+        
+        if chunking_params.get("overlap") is not None:
+            print("✅ Using AI-recommended overlap")
+        else:
+            print("⚠️ Using default overlap (AI analysis may have failed)")
     
     # Try to load existing storage, otherwise create new indexes
     storage_dir = "storage"
     
     # First, always load documents as they're needed for BM25
-    print("Loading documents...")
+    if not is_quiet_mode():
+        print("Loading documents...")
     try:
         documents = SimpleDirectoryReader("data").load_data()
-        print(f"Loaded {len(documents)} documents.")
+        if not is_quiet_mode():
+            print(f"Loaded {len(documents)} documents.")
     except Exception as e:
-        print(f"Error loading documents: {e}")
+        if not is_quiet_mode():
+            print(f"Error loading documents: {e}")
         raise
 
     # Parse documents into nodes for BM25 with AI-optimized chunking
-    print(f"Parsing documents into nodes with AI-optimized chunking...")
+    if not is_quiet_mode():
+        print(f"Parsing documents into nodes with AI-optimized chunking...")
     parser = SimpleNodeParser.from_defaults(
         chunk_size=optimal_chunk_size,  # AI-recommended chunk size
         chunk_overlap=optimal_overlap,  # AI-recommended overlap
     )
     nodes = parser.get_nodes_from_documents(documents)
-    print(f"Created {len(nodes)} nodes with optimal chunking strategy")
+    if not is_quiet_mode():
+        print(f"Created {len(nodes)} nodes with optimal chunking strategy")
     
     # Try to load existing indexes
     try:
-        print("Trying to load existing indexes from storage...")
+        if not is_quiet_mode():
+            print("Trying to load existing indexes from storage...")
         
         # Check if storage directory exists and has the required files
         if os.path.exists(storage_dir) and os.path.exists(os.path.join(storage_dir, "index_store.json")):
@@ -808,22 +826,28 @@ async def initialize_rag_pipeline():
             
             try:
                 vector_index = load_index_from_storage(storage_context, index_id="vector")
-                print("✅ Vector index loaded successfully")
+                if not is_quiet_mode():
+                    print("✅ Vector index loaded successfully")
             except Exception as vector_error:
-                print(f"⚠️ Failed to load vector index with ID: {vector_error}")
+                if not is_quiet_mode():
+                    print(f"⚠️ Failed to load vector index with ID: {vector_error}")
                 try:
                     # Try loading without index ID (fallback)
                     vector_index = load_index_from_storage(storage_context)
-                    print("✅ Vector index loaded without ID")
+                    if not is_quiet_mode():
+                        print("✅ Vector index loaded without ID")
                 except Exception as fallback_error:
-                    print(f"❌ Failed to load vector index completely: {fallback_error}")
+                    if not is_quiet_mode():
+                        print(f"❌ Failed to load vector index completely: {fallback_error}")
                     vector_index = None
             
             try:
                 keyword_index = load_index_from_storage(storage_context, index_id="keyword")
-                print("✅ Keyword index loaded successfully")
+                if not is_quiet_mode():
+                    print("✅ Keyword index loaded successfully")
             except Exception as keyword_error:
-                print(f"⚠️ Failed to load keyword index: {keyword_error}")
+                if not is_quiet_mode():
+                    print(f"⚠️ Failed to load keyword index: {keyword_error}")
                 keyword_index = None
             
             # If either index failed to load, recreate the missing ones
@@ -852,9 +876,11 @@ async def initialize_rag_pipeline():
             raise Exception("Storage directory or index_store.json not found")
         
     except Exception as e:
-        print(f"Could not load from storage ({e}), creating new indexes with AI-optimized chunking...")
+        if not is_quiet_mode():
+            print(f"Could not load from storage ({e}), creating new indexes with AI-optimized chunking...")
         
-        print("Creating new indexes from scratch with AI-optimized chunking...")
+        if not is_quiet_mode():
+            print("Creating new indexes from scratch with AI-optimized chunking...")
         # Create vector store index from nodes (with optimal chunking)
         vector_index = VectorStoreIndex(nodes, embed_model=Settings.embed_model)
         
@@ -862,7 +888,8 @@ async def initialize_rag_pipeline():
         keyword_index = SimpleKeywordTableIndex(nodes)
         
         # Save indexes to storage with improved error handling
-        print("Saving new AI-optimized indexes to storage...")
+        if not is_quiet_mode():
+            print("Saving new AI-optimized indexes to storage...")
         try:
             # Ensure storage directory exists
             os.makedirs(storage_dir, exist_ok=True)
@@ -899,7 +926,8 @@ async def initialize_rag_pipeline():
                     results = retriever.retrieve(query_bundle)
                     all_results.extend(results)
                 except Exception as e:
-                    print(f"Warning: Retriever failed: {e}")
+                    if not is_quiet_mode():
+                        print(f"Warning: Retriever failed: {e}")
                     continue
 
             # Create a dictionary to store unique nodes and their highest scores
@@ -926,8 +954,9 @@ async def initialize_rag_pipeline():
         llm=Settings.llm,
     )
 
-    print(f"🎉 RAG pipeline initialized successfully with AI-optimized chunking!")
-    print(f"📊 Final chunking parameters: chunk_size={optimal_chunk_size}, overlap={optimal_overlap}")
+    if not is_quiet_mode():
+        print(f"🎉 RAG pipeline initialized successfully with AI-optimized chunking!")
+        print(f"📊 Final chunking parameters: chunk_size={optimal_chunk_size}, overlap={optimal_overlap}")
     return hybrid_query_engine
 
 async def search_documents_with_context(query: str, conversation_history: List[Dict] = None) -> str:

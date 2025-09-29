@@ -22,13 +22,17 @@ from pathlib import Path
 
 load_dotenv()
 
+def is_quiet_mode():
+    """Check if quiet mode is enabled"""
+    return os.environ.get('RECALLR_QUIET_MODE', '0') == '1'
+
 # Validate API keys
 if not os.getenv("GEMINI_API_KEY"):
     raise ValueError("GEMINI_API_KEY environment variable is required")
 
 # YouTube API key is optional - will gracefully handle if missing
 youtube_api_key = os.getenv("YOUTUBE_API_KEY")
-if not youtube_api_key:
+if not youtube_api_key and not is_quiet_mode():
     print("Warning: YOUTUBE_API_KEY not found. YouTube search functionality will be limited.")
 
 # Conversation history file path
@@ -618,31 +622,28 @@ Please provide a helpful, human-like response that shows you understand the cont
 async def main():
     global ACADEMIC_SYSTEM_PROMPT
     
-    print("Recallr -Your AI Academic Assistant is starting up...")
-    print("Initializing the pipeline...")
+    # Suppress verbose output during initialization
+    import warnings
+    warnings.filterwarnings("ignore")
+    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+    os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
     
-    # Load existing conversation history
+    # Load existing conversation history (silent)
     load_conversation_history()
     
-    # Initialize Academic System Prompt with smart caching
-    print("📚 Initializing Academic System Prompt...")
+    # Initialize Academic System Prompt with smart caching (silent)
     try:
         data_path = Path('data')
         ACADEMIC_SYSTEM_PROMPT = get_system_prompt_with_caching(data_path)
-        print("✅ Academic System Prompt initialized successfully!")
     except Exception as e:
-        print(f"⚠️ Warning: Academic System Prompt initialization failed: {e}")
         ACADEMIC_SYSTEM_PROMPT = "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."
-        print("Using default academic system prompt...")
     
-    # Initialize RAG pipeline first by making a dummy call to trigger index loading
+    # Initialize RAG pipeline first by making a dummy call to trigger index loading (silent)
     try:
         # This will initialize all the indexes (vector, keyword, BM25) upfront
         await search_documents_with_context("initialization", [])
-        print("✅ RAG pipeline initialized successfully!")
     except Exception as e:
-        print(f"⚠️ Warning: RAG initialization failed: {e}")
-        print("Continuing with web search and YouTube only...")
+        pass  # Continue with web search and YouTube only
     
     while True:
         try:
@@ -666,7 +667,8 @@ async def main():
             routing_analysis = await analyze_query_routing(user_query)
             
             print(f"🎯 Routing decision: {routing_analysis['routing']} (confidence: {routing_analysis['confidence']:.2f})")
-            print(f"💡 Reasoning: {routing_analysis['reasoning']}")
+            if not is_quiet_mode() or not ('failed' in routing_analysis['reasoning'].lower() or 'unavailable' in routing_analysis['reasoning'].lower()):
+                print(f"💡 Reasoning: {routing_analysis['reasoning']}")
             
             if routing_analysis['routing'] == 'CODE_SEARCH':
                 # Route to specialized code search assistant

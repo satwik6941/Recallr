@@ -8,6 +8,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def is_quiet_mode():
+    """Check if we're in quiet mode for cleaner output"""
+    return os.getenv('RECALLR_QUIET_MODE', '0') == '1'
+
 file_path = Path('data')
 
 # Cache file paths
@@ -245,7 +249,8 @@ def get_system_prompt_with_caching(file_path):
     """
     # Check if PDF collection has changed
     if has_pdf_collection_changed(file_path):
-        print("📚 PDF collection changed - processing documents...")
+        if not is_quiet_mode():
+            print("📚 PDF collection changed - processing documents...")
         
         # Get current PDF list
         current_pdfs = get_current_pdf_files(file_path)
@@ -264,7 +269,8 @@ def get_system_prompt_with_caching(file_path):
         save_system_prompt_cache(system_prompt)
         save_pdf_list_cache(current_pdfs)
         
-        print(f"✅ Processed {len(current_pdfs)} PDF files and updated caches")
+        if not is_quiet_mode():
+            print(f"✅ Processed {len(current_pdfs)} PDF files and updated caches")
         return system_prompt
     
     else:
@@ -292,39 +298,48 @@ def process_all_documents(file_path):
     pdf_files = [f for f in os.listdir(file_path) if f.endswith(".pdf")]
     
     if not pdf_files:
-        print("No PDF files found!")
+        if not is_quiet_mode():
+            print("No PDF files found!")
         return "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."
     
-    print(f"Found {len(pdf_files)} PDF files to process...")
+    if not is_quiet_mode():
+        print(f"Found {len(pdf_files)} PDF files to process...")
     
     for file in pdf_files:
-        print(f"📄 Processing {file}...")
+        if not is_quiet_mode():
+            print(f"📄 Processing {file}...")
         
         text = extract_text(os.path.join(file_path, file))
         
         if not text.strip():
-            print(f"⚠️ No text extracted from {file}")
+            if not is_quiet_mode():
+                print(f"⚠️ No text extracted from {file}")
             continue
         
         # Chunk the text
         chunks = chunk_text(text)
-        print(f"   Created {len(chunks)} chunks")
+        if not is_quiet_mode():
+            print(f"   Created {len(chunks)} chunks")
         
         if chunks:
             # Select 3 best chunks from this PDF
             best_chunks = select_best_chunks(chunks, num_chunks=3)
             pdf_chunks_dict[file] = best_chunks
-            print(f"   Selected {len(best_chunks)} best chunks")
+            if not is_quiet_mode():
+                print(f"   Selected {len(best_chunks)} best chunks")
         else:
-            print(f"   No valid chunks created from {file}")
+            if not is_quiet_mode():
+                print(f"   No valid chunks created from {file}")
     
     if not pdf_chunks_dict:
-        print("No valid chunks extracted from any PDF!")
+        if not is_quiet_mode():
+            print("No valid chunks extracted from any PDF!")
         return "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."
     
     # Generate system prompt from all selected chunks
     total_chunks = sum(len(chunks) for chunks in pdf_chunks_dict.values())
-    print(f"🤖 Generating system prompt from {total_chunks} selected chunks across {len(pdf_chunks_dict)} PDFs...")
+    if not is_quiet_mode():
+        print(f"🤖 Generating system prompt from {total_chunks} selected chunks across {len(pdf_chunks_dict)} PDFs...")
     
     return generate_system_prompt_from_chunks(pdf_chunks_dict)
 
