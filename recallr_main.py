@@ -449,18 +449,114 @@ def initialize_application():
     
     return True
 
+def install_globally():
+    """Install Recallr globally so it can be run from anywhere"""
+    recallr_path = get_recallr_path()
+    
+    print("\n🌍 Global Installation Wizard")
+    print("=" * 50)
+    print("\nThis will install Recallr as a global command.")
+    print("After installation, you can run 'recallr' from anywhere in your terminal!\n")
+    
+    # Step 1: Verify we're in the right directory
+    setup_file = recallr_path / "setup.py"
+    if not setup_file.exists():
+        print("❌ setup.py not found. Please run this from the Recallr directory.")
+        return False
+    
+    # Step 2: Check dependencies first
+    print("📦 Step 1: Checking dependencies...")
+    if not check_dependencies():
+        print("\n📥 Installing dependencies first...")
+        if not install_dependencies():
+            print("❌ Failed to install dependencies")
+            return False
+    
+    # Step 3: Check environment variables
+    print("\n🔑 Step 2: Checking API keys...")
+    if not check_environment():
+        print("❌ API keys not configured")
+        return False
+    
+    # Step 4: Install package globally
+    print("\n🚀 Step 3: Installing Recallr globally...")
+    loader = AnimatedLoader("Installing Recallr package globally")
+    loader.start()
+    
+    try:
+        # Install in editable mode so changes are reflected immediately
+        result = subprocess.run([
+            sys.executable, "-m", "pip", "install", "-e", str(recallr_path)
+        ], capture_output=True, text=True)
+        
+        time.sleep(2)  # Let animation run
+        
+        if result.returncode == 0:
+            loader.stop("🎉", "Recallr installed globally!")
+            
+            print("\n" + "=" * 50)
+            print("✅ Installation Complete!")
+            print("=" * 50)
+            print("\n📍 You can now run Recallr from anywhere:")
+            print("   Just type: recallr")
+            print("\n🔧 Useful commands:")
+            print("   recallr          - Start the assistant")
+            print("   recallr --help   - Show help")
+            print("   recallr --status - Check system status")
+            print("\n💡 Tip: Close and reopen your terminal for changes to take effect.")
+            print("=" * 50)
+            return True
+        else:
+            loader.stop("❌", "Installation failed")
+            print(f"\n❌ Error: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        loader.stop("❌", f"Installation error: {str(e)[:50]}...")
+        return False
+
+def uninstall_globally():
+    """Uninstall Recallr from global installation"""
+    print("\n🗑️ Uninstalling Recallr globally...")
+    loader = AnimatedLoader("Removing global installation")
+    loader.start()
+    
+    try:
+        result = subprocess.run([
+            sys.executable, "-m", "pip", "uninstall", "recallr", "-y"
+        ], capture_output=True, text=True)
+        
+        time.sleep(1)
+        
+        if result.returncode == 0:
+            loader.stop("✅", "Recallr uninstalled successfully")
+            print("\n✅ Recallr has been removed from global installation.")
+            print("💡 You can still run it locally with: python recallr_main.py")
+            return True
+        else:
+            loader.stop("⚠️", "Uninstall completed with warnings")
+            return True
+            
+    except Exception as e:
+        loader.stop("❌", f"Uninstall error")
+        print(f"Error: {e}")
+        return False
+
 def show_help():
     """Display help information"""
     print("""
 🤖 Recallr CLI - AI-Powered Learning Assistant
 
 USAGE:
-    recallr [OPTIONS]
+    python recallr_main.py [OPTIONS]    # Local run
+    recallr [OPTIONS]                   # After global installation
 
 OPTIONS:
-    --help, -h     Show this help message
-    --version, -v  Show version information
-    --status       Check system status (dependencies, environment)
+    --help, -h        Show this help message
+    --version, -v     Show version information
+    --status          Check system status (dependencies, environment)
+    --install         Install Recallr globally (run 'recallr' from anywhere)
+    --uninstall       Remove global installation
 
 DESCRIPTION:
     Recallr is an AI-powered learning assistant that helps with:
@@ -477,10 +573,18 @@ INTERACTIVE COMMANDS:
     /status        - Show system status
     /exit, /quit   - Exit the application
 
+INSTALLATION:
+    # First time setup - Install globally
+    python recallr_main.py --install
+    
+    # Then use from anywhere
+    recallr
+
 SETUP:
     1. Create a .env file with GEMINI_API_KEY=your_api_key
     2. Optionally add YOUTUBE_API_KEY for enhanced search
-    3. Run 'recallr' to start the assistant
+    3. Run 'python recallr_main.py --install' for global installation
+    4. Use 'recallr' command from anywhere!
 
 For more information, visit: https://github.com/satwik6941/Recallr
 """)
@@ -611,6 +715,12 @@ def main():
         elif arg == '--status':
             check_status()
             return
+        elif arg == '--install':
+            success = install_globally()
+            sys.exit(0 if success else 1)
+        elif arg == '--uninstall':
+            success = uninstall_globally()
+            sys.exit(0 if success else 1)
         else:
             print(f"Unknown option: {sys.argv[1]}")
             print("Use --help for usage information")
