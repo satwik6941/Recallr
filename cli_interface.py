@@ -263,6 +263,122 @@ class ExitCommand(SlashCommand):
             print("👋 Goodbye! Thanks for using Recallr!")
         return False
 
+class ModeCommand(SlashCommand):
+    """Switch pipeline mode"""
+    def __init__(self):
+        super().__init__(
+            name="mode",
+            description="Switch between pipeline modes (AUTO, ACADEMIC_RAG, MATH, CODE, GENERAL)",
+            aliases=["m", "pipeline", "switch"]
+        )
+
+    async def execute(self, args: List[str], context: Dict[str, Any]) -> bool:
+        # Import main module to access PIPELINE_MODE
+        import main
+        
+        if RICH_AVAILABLE:
+            from rich.table import Table
+            from rich.panel import Panel
+            
+            # If no arguments, show current mode and options
+            if not args:
+                table = Table(title="🎯 Available Pipeline Modes", show_header=True, header_style="bold magenta")
+                table.add_column("Mode", style="cyan", width=20)
+                table.add_column("Description", style="yellow")
+                table.add_column("Status", style="green", width=10)
+                
+                modes = {
+                    "AUTO": "✨ Smart routing - AI decides best pipeline",
+                    "ACADEMIC_RAG": "📚 Search only in uploaded PDF documents",
+                    "MATH_SEARCH": "🔢 Mathematics-focused problem solving",
+                    "CODE_SEARCH": "💻 Programming and coding assistance",
+                    "GENERAL_SEARCH": "🌐 Google Search for real-time info"
+                }
+                
+                for mode_name, description in modes.items():
+                    current = "→ Current" if main.PIPELINE_MODE == mode_name else ""
+                    table.add_row(mode_name, description, current)
+                
+                console.print(Panel(table, border_style="cyan"))
+                console.print("\n💡 [yellow]Usage: /mode <MODE_NAME> or /mode auto|academic|math|code|general[/yellow]\n")
+                return True
+            
+            # Get the requested mode
+            requested_mode = args[0].upper()
+            
+            # Map shortcuts to full names
+            mode_shortcuts = {
+                'AUTO': 'AUTO',
+                'ACADEMIC': 'ACADEMIC_RAG',
+                'RAG': 'ACADEMIC_RAG',
+                'MATH': 'MATH_SEARCH',
+                'CODE': 'CODE_SEARCH',
+                'GENERAL': 'GENERAL_SEARCH',
+                'GOOGLE': 'GENERAL_SEARCH'
+            }
+            
+            # Normalize the mode
+            if requested_mode in mode_shortcuts:
+                new_mode = mode_shortcuts[requested_mode]
+            elif requested_mode in ['ACADEMIC_RAG', 'MATH_SEARCH', 'CODE_SEARCH', 'GENERAL_SEARCH']:
+                new_mode = requested_mode
+            else:
+                console.print(f"[bold red]❌ Invalid mode: {requested_mode}[/bold red]")
+                console.print("[yellow]Valid modes: AUTO, ACADEMIC_RAG, MATH_SEARCH, CODE_SEARCH, GENERAL_SEARCH[/yellow]")
+                return True
+            
+            # Update the mode
+            main.PIPELINE_MODE = new_mode
+            console.print(f"[bold green]✅ Pipeline mode changed to: {new_mode}[/bold green]")
+            
+            # Show what this means
+            mode_descriptions = {
+                "AUTO": "AI will automatically route queries to the best pipeline",
+                "ACADEMIC_RAG": "All queries will search only in your uploaded PDFs",
+                "MATH_SEARCH": "All queries will use the math problem solver",
+                "CODE_SEARCH": "All queries will use the coding assistant",
+                "GENERAL_SEARCH": "All queries will use Google Search for real-time info"
+            }
+            console.print(f"[cyan]📝 {mode_descriptions.get(new_mode, 'Unknown mode')}[/cyan]\n")
+            
+        else:
+            # Fallback for non-rich terminals
+            if not args:
+                print("\n🎯 Available Pipeline Modes:")
+                print("="*50)
+                print(f"  AUTO          - Smart routing (Current: {'✓' if main.PIPELINE_MODE == 'AUTO' else ''})")
+                print(f"  ACADEMIC_RAG  - PDF documents only (Current: {'✓' if main.PIPELINE_MODE == 'ACADEMIC_RAG' else ''})")
+                print(f"  MATH_SEARCH   - Mathematics solver (Current: {'✓' if main.PIPELINE_MODE == 'MATH_SEARCH' else ''})")
+                print(f"  CODE_SEARCH   - Coding assistant (Current: {'✓' if main.PIPELINE_MODE == 'CODE_SEARCH' else ''})")
+                print(f"  GENERAL_SEARCH- Google Search (Current: {'✓' if main.PIPELINE_MODE == 'GENERAL_SEARCH' else ''})")
+                print("\n💡 Usage: /mode <MODE_NAME>")
+                return True
+            
+            requested_mode = args[0].upper()
+            mode_shortcuts = {
+                'AUTO': 'AUTO',
+                'ACADEMIC': 'ACADEMIC_RAG',
+                'RAG': 'ACADEMIC_RAG',
+                'MATH': 'MATH_SEARCH',
+                'CODE': 'CODE_SEARCH',
+                'GENERAL': 'GENERAL_SEARCH',
+                'GOOGLE': 'GENERAL_SEARCH'
+            }
+            
+            if requested_mode in mode_shortcuts:
+                new_mode = mode_shortcuts[requested_mode]
+            elif requested_mode in ['ACADEMIC_RAG', 'MATH_SEARCH', 'CODE_SEARCH', 'GENERAL_SEARCH']:
+                new_mode = requested_mode
+            else:
+                print(f"❌ Invalid mode: {requested_mode}")
+                print("Valid modes: AUTO, ACADEMIC_RAG, MATH_SEARCH, CODE_SEARCH, GENERAL_SEARCH")
+                return True
+            
+            main.PIPELINE_MODE = new_mode
+            print(f"✅ Pipeline mode changed to: {new_mode}\n")
+        
+        return True
+
 class EnhancedCLI:
     """Enhanced CLI interface with rich formatting and slash commands"""
 
@@ -287,6 +403,7 @@ class EnhancedCLI:
             ClearCommand(),
             HelpCommand(),
             StatusCommand(),
+            ModeCommand(),
             ExitCommand(),
         ]
 
@@ -471,17 +588,69 @@ class EnhancedCLI:
             print(f"{icon_map.get(style, 'ℹ️')} {message}")
 
     async def get_user_input(self) -> str:
-        """Get user input with enhanced prompt"""
+        """Get user input with enhanced prompt and command suggestions"""
         if RICH_AVAILABLE:
             try:
-                return Prompt.ask(self.display_prompt()).strip()
+                user_input = Prompt.ask(self.display_prompt()).strip()
+                
+                # If user typed just '/' or starts with '/', show command suggestions
+                if user_input == '/' or (user_input.startswith('/') and ' ' not in user_input and len(user_input) <= 10):
+                    self.show_command_suggestions(user_input[1:] if len(user_input) > 1 else "")
+                    # Ask again after showing suggestions
+                    return Prompt.ask(self.display_prompt()).strip()
+                
+                return user_input
             except (KeyboardInterrupt, EOFError):
                 return "/exit"
         else:
             try:
-                return input(f"\n{self.display_prompt()}").strip()
+                user_input = input(f"\n{self.display_prompt()}").strip()
+                
+                # Show command suggestions for non-rich terminals too
+                if user_input == '/' or (user_input.startswith('/') and ' ' not in user_input and len(user_input) <= 10):
+                    self.show_command_suggestions(user_input[1:] if len(user_input) > 1 else "")
+                    return input(f"\n{self.display_prompt()}").strip()
+                
+                return user_input
             except (KeyboardInterrupt, EOFError):
                 return "/exit"
+    
+    def show_command_suggestions(self, partial_command: str = ""):
+        """Show available command suggestions based on partial input"""
+        # Filter commands based on partial input
+        matching_commands = []
+        for cmd_name, cmd in self.commands.items():
+            # Only show primary command names, not aliases
+            if cmd.name == cmd_name:  # Skip aliases
+                if not partial_command or cmd_name.startswith(partial_command.lower()):
+                    matching_commands.append(cmd)
+        
+        if not matching_commands:
+            return
+        
+        if RICH_AVAILABLE:
+            from rich.table import Table
+            from rich.panel import Panel
+            
+            table = Table(title="💡 Available Commands", show_header=True, header_style="bold cyan")
+            table.add_column("Command", style="green", width=15)
+            table.add_column("Aliases", style="yellow", width=20)
+            table.add_column("Description", style="white")
+            
+            for cmd in matching_commands:
+                aliases = ", ".join([f"/{alias}" for alias in cmd.aliases]) if cmd.aliases else "-"
+                table.add_row(f"/{cmd.name}", aliases, cmd.description)
+            
+            console.print(Panel(table, border_style="cyan", title="💬 Slash Commands"))
+        else:
+            print("\n💡 Available Commands:")
+            print("="*70)
+            for cmd in matching_commands:
+                aliases = ", ".join([f"/{alias}" for alias in cmd.aliases]) if cmd.aliases else ""
+                alias_str = f" (aliases: {aliases})" if aliases else ""
+                print(f"  /{cmd.name:<12} - {cmd.description}{alias_str}")
+            print("="*70)
+
 
     def show_loading(self, message: str = "Processing..."):
         """Show loading spinner (if rich is available)"""

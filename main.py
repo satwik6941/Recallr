@@ -23,6 +23,7 @@ from hybrid import (
 from code_search import add_user_message as code_add_user_message, add_ai_message as code_add_ai_message, get_dual_responses as code_get_dual_responses, save_dual_responses_to_file as code_save_dual_responses_to_file
 from math_search import add_user_message as math_add_user_message, add_ai_message as math_add_ai_message, get_dual_responses as math_get_dual_responses, save_dual_responses_to_file as math_save_dual_responses_to_file
 from doc_processing import get_system_prompt_with_caching, has_pdf_collection_changed
+from general_search import answer_query_with_google_search as google_search_answer
 import time
 import os
 from datetime import datetime
@@ -48,6 +49,9 @@ CONVERSATION_FILE = "conversation_history.txt"
 
 # Global variable to store the academic system prompt
 ACADEMIC_SYSTEM_PROMPT = None
+
+# Global variable for pipeline mode
+PIPELINE_MODE = "AUTO"  # Options: AUTO, ACADEMIC_RAG, MATH, CODE, GENERAL
 
 def save_conversation_history():
     """Save the entire conversation history to a text file"""
@@ -130,44 +134,59 @@ Current user query: "{query}"
    
    **Programming Keywords to detect:** code, programming, python, java, javascript, C++, algorithm, function, variable, loop, array, debugging, software, app, website, database, API, framework, git, coding
 
-3. **ACADEMIC_RAG** - For ALL other academic subjects and general knowledge:
-   **All Levels:** Science (physics, chemistry, biology), social studies, history, geography, literature, languages, engineering subjects (non-coding), research topics, study materials, course content, general knowledge
+3. **GENERAL_SEARCH** - For general questions, current events, news, and conversational queries:
+   **General Topics:** Current events, news, weather, sports scores, celebrity information, product information, shopping queries, travel information, restaurant recommendations, movie/TV show info
+   **Conversational:** Casual questions, general knowledge not in PDFs, recent developments, real-time information, "what's happening", trending topics
+   **Real-time Info:** Stock prices, weather forecasts, sports results, breaking news, latest updates
    
-   **Academic Keywords to detect:** science, physics, chemistry, biology, history, geography, literature, essay, theory, concept, explain, definition, study, course, subject
+   **General Keywords to detect:** who is, what happened, latest news, current, today, now, recent, trending, weather, score, winner, update, celebrity, movie, restaurant, shopping, price, where to buy, best, recommend
+
+4. **ACADEMIC_RAG** - For academic subjects based on uploaded PDFs and study materials:
+   **All Levels:** Science (physics, chemistry, biology), social studies, history, geography, literature, languages, engineering subjects (non-coding), research topics, study materials, course content from PDFs
+   **Focus:** Questions about uploaded documents, coursework, textbook content, lecture notes
+   
+   **Academic Keywords to detect:** science, physics, chemistry, biology, history, geography, literature, essay, theory, concept, explain, definition, study, course, subject, textbook, notes, lecture, chapter
 
 **SMART ROUTING RULES:**
 
 **Priority System:**
 1. **Mathematics FIRST:** If query relates to numbers, mathematical operations, mathematical concepts (basic to advanced), equations, formulas, or asks for calculations/mathematical solutions or doubts/queries → MATH_SEARCH
 2. **Programming SECOND:** If query relates to coding, programming languages, software development, or technical implementation or any kinds of doubts/queries → CODE_SEARCH
-3. **Academic THIRD:** All other educational content, theories, concepts, general knowledge → ACADEMIC_RAG
+3. **General Knowledge THIRD:** If query asks about current events, news, general information NOT in PDFs, real-time data, conversational questions → GENERAL_SEARCH
+4. **Academic PDFs FOURTH:** For questions about course materials, textbook content, uploaded documents, study notes → ACADEMIC_RAG
 
 **Level-Adaptive Detection:**
 - **Simple Math:** "What is 2+2?" or "How to add fractions?" → MATH_SEARCH
 - **Advanced Math:** "Solve differential equation" or "Find derivative of sin(x)" → MATH_SEARCH
 - **Basic Programming:** "How to print in Python?" → CODE_SEARCH
 - **Advanced Programming:** "Implement binary search tree" → CODE_SEARCH
-- **Science Concepts:** "What is photosynthesis?" → ACADEMIC_RAG
-- **Engineering Theory:** "Explain thermodynamics" → ACADEMIC_RAG
+- **General Questions:** "Who won Euro 2024?" or "What's the weather today?" → GENERAL_SEARCH
+- **Current Events:** "Latest news about AI" or "Who is trending now?" → GENERAL_SEARCH
+- **Science Concepts (from PDFs):** "What is photosynthesis?" (if in uploaded materials) → ACADEMIC_RAG
+- **Engineering Theory:** "Explain thermodynamics" (if in course PDFs) → ACADEMIC_RAG
 
 **Context Consideration:**
 - If previous conversation was about math and current query uses pronouns ("solve this", "what about it"), likely MATH_SEARCH
 - If previous conversation was about coding and current query references ("debug this", "how to fix it"), likely CODE_SEARCH
+- If asking about real-time or recent information not in PDFs → GENERAL_SEARCH
+- If asking about study materials or course content → ACADEMIC_RAG
 - Consider educational level from context
 
 **Edge Cases:**
 - "Mathematical algorithms" → Focus on implementation = CODE_SEARCH, Focus on theory = MATH_SEARCH
 - "Statistics in Python" → Implementation = CODE_SEARCH, Mathematical concepts = MATH_SEARCH
 - "Physics equations" → MATH_SEARCH (if solving), ACADEMIC_RAG (if explaining concepts)
+- "Latest iPhone price" → GENERAL_SEARCH (real-time info)
+- "Quantum physics from lecture notes" → ACADEMIC_RAG (course material)
 
 Respond with ONLY a JSON object in this exact format:
 {{
-    "routing": "MATH_SEARCH_OR_CODE_SEARCH_OR_ACADEMIC_RAG",
+    "routing": "MATH_SEARCH_OR_CODE_SEARCH_OR_GENERAL_SEARCH_OR_ACADEMIC_RAG",
     "confidence": 0.85,
     "reasoning": "brief explanation including detected educational level and key indicators"
 }}
 
-Where routing should be either "MATH_SEARCH" or "CODE_SEARCH" or "ACADEMIC_RAG".
+Where routing should be either "MATH_SEARCH" or "CODE_SEARCH" or "GENERAL_SEARCH" or "ACADEMIC_RAG".
 """
 
         # Use Gemini orchestrator for routing decision
@@ -399,8 +418,87 @@ Remember: This is part of an ongoing conversation with a student. Be encouraging
     except Exception as e:
         return f"Error in code search: {str(e)}. Please try rephrasing your coding question."
 
+async def general_search_answer(query: str) -> str:
+    """Handle general queries using Google Search via general_search.py"""
+    try:
+        print("🌐 Detected general query - routing to Google Search...")
+        
+        # The general_search.py module is synchronous, so we need to wrap it
+        # Import the actual function to use the query parameter
+        from general_search import answer_query_with_google_search
+        
+        print("🔍 Searching Google for real-time information...")
+        
+        # Run the synchronous function in a thread pool to avoid blocking
+        import asyncio
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, lambda: answer_query_with_google_search(query))
+        
+        print("✅ Google Search complete")
+        
+        return response
+        
+    except Exception as e:
+        return f"Error in general search: {str(e)}. Please try rephrasing your question."
+
 # Conversation context to maintain chat history
 conversation_history = []
+
+async def select_pipeline_mode(cli=None) -> str:
+    """Let user select which pipeline mode to use"""
+    global PIPELINE_MODE
+    
+    if CLI_ENHANCED and cli:
+        from rich.panel import Panel
+        from rich.table import Table
+        
+        # Create a nice table showing pipeline options
+        table = Table(title="🎯 Select Pipeline Mode", show_header=True, header_style="bold magenta")
+        table.add_column("Option", style="cyan", width=12)
+        table.add_column("Mode", style="green", width=20)
+        table.add_column("Description", style="yellow")
+        
+        table.add_row("1", "AUTO (Default)", "✨ Smart routing - AI decides the best pipeline for each query")
+        table.add_row("2", "ACADEMIC_RAG", "📚 Academic PDFs only - Answers from your uploaded documents")
+        table.add_row("3", "MATH", "🔢 Mathematics - Specialized math problem solver")
+        table.add_row("4", "CODE", "💻 Programming - Code help and debugging assistant")
+        table.add_row("5", "GENERAL", "🌐 Google Search - Real-time information from the web")
+        
+        console.print(Panel(table, border_style="cyan"))
+        console.print("\n💡 [yellow]Tip: You can switch modes anytime using /mode command[/yellow]\n")
+        
+        choice = input("Select mode (1-5) [default: 1]: ").strip()
+    else:
+        print("\n" + "="*60)
+        print("🎯 SELECT PIPELINE MODE")
+        print("="*60)
+        print("\n1. AUTO (Default) - Smart routing based on query type")
+        print("2. ACADEMIC_RAG - Only search in your uploaded PDF documents")
+        print("3. MATH - Mathematics-focused problem solving")
+        print("4. CODE - Programming and coding assistance")
+        print("5. GENERAL - Google Search for real-time information")
+        print("\n💡 Tip: You can switch modes during chat using /mode command")
+        print("="*60)
+        choice = input("\nSelect mode (1-5) [default: 1]: ").strip()
+    
+    # Map choice to pipeline mode
+    mode_map = {
+        '1': 'AUTO',
+        '2': 'ACADEMIC_RAG',
+        '3': 'MATH_SEARCH',
+        '4': 'CODE_SEARCH',
+        '5': 'GENERAL_SEARCH',
+        '': 'AUTO'  # Default
+    }
+    
+    PIPELINE_MODE = mode_map.get(choice, 'AUTO')
+    
+    if CLI_ENHANCED and cli:
+        cli.display_info(f"✅ Pipeline mode set to: {PIPELINE_MODE}", "success")
+    else:
+        print(f"\n✅ Pipeline mode set to: {PIPELINE_MODE}\n")
+    
+    return PIPELINE_MODE
 
 async def refresh_academic_system_prompt():
     """Manually refresh the academic system prompt by re-checking PDF collection"""
@@ -651,6 +749,9 @@ async def main():
         print("Commands: 'quit', 'summary', 'refresh'")
         print("-" * 60)
 
+    # Let user select pipeline mode
+    await select_pipeline_mode(cli)
+
     # Load existing conversation history (silent)
     load_conversation_history()
 
@@ -709,13 +810,27 @@ async def main():
             # ✨ AUTO-CHECK: Check for document changes before processing each query
             documents_updated = await check_and_update_documents()
 
-            if CLI_ENHANCED:
-                cli.display_info("🧠 Analyzing query for optimal routing...", "info")
+            # Check if user has forced a specific pipeline mode
+            if PIPELINE_MODE != "AUTO":
+                if CLI_ENHANCED:
+                    cli.display_info(f"🎯 Using {PIPELINE_MODE} pipeline (manual mode)", "info")
+                else:
+                    print(f"🎯 Using {PIPELINE_MODE} pipeline (manual mode)")
+                
+                # Override routing based on pipeline mode
+                routing_analysis = {
+                    'routing': PIPELINE_MODE.replace('_ONLY', ''),
+                    'confidence': 1.0,
+                    'reasoning': f'Manual override - user selected {PIPELINE_MODE} mode'
+                }
             else:
-                print("🧠 Analyzing query for optimal routing...")
+                if CLI_ENHANCED:
+                    cli.display_info("🧠 Analyzing query for optimal routing...", "info")
+                else:
+                    print("🧠 Analyzing query for optimal routing...")
 
-            # Use orchestrator LLM to determine routing strategy
-            routing_analysis = await analyze_query_routing(user_query)
+                # Use orchestrator LLM to determine routing strategy
+                routing_analysis = await analyze_query_routing(user_query)
 
             # Display routing feedback with enhanced CLI
             if CLI_ENHANCED:
@@ -746,7 +861,18 @@ async def main():
 
                 # Add to conversation history and save to file
                 add_to_conversation_history(user_query, final_answer)
-                
+
+            elif routing_analysis['routing'] == 'GENERAL_SEARCH':
+                # Route to specialized Google Search
+                if CLI_ENHANCED:
+                    cli.display_info("🌐 Routing to Google Search for real-time information...", "info")
+                else:
+                    print("🌐 Routing to Google Search for real-time information...")
+                final_answer = await general_search_answer(user_query)
+
+                # Add to conversation history and save to file
+                add_to_conversation_history(user_query, final_answer)
+
             else:
                 # Route to academic RAG pipeline (existing flow)
                 if CLI_ENHANCED:

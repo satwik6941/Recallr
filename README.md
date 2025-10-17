@@ -64,7 +64,7 @@ Whether you're a student working through complex coursework, a researcher analyz
 - **pip package manager**
 - **Internet connection** (for AI model access)
 
-### Quick Installation
+### Option 1: Quick Local Run (Recommended for First-Time Setup)
 
 1. **Clone the Repository**
 
@@ -86,13 +86,73 @@ Whether you're a student working through complex coursework, a researcher analyz
    - 📁 Create necessary directories
    - 🚀 Launch the assistant
 
+### Option 2: Global Installation (Run from Anywhere)
+
+For convenient access to Recallr from any directory in your terminal:
+
+1. **Clone and Navigate**
+
+   ```bash
+   git clone https://github.com/satwik6941/Recallr.git
+   cd Recallr
+   ```
+
+2. **Install Globally**
+
+   ```bash
+   python recallr_main.py --install
+   ```
+
+   This will:
+   - ✅ Verify system requirements
+   - 📦 Install all dependencies
+   - 🔑 Configure API keys
+   - 🌍 Install Recallr as a global command
+
+3. **Use from Anywhere**
+
+   After installation, open a new terminal and run:
+
+   ```bash
+   recallr
+   ```
+
+   **Useful Global Commands:**
+   - `recallr` - Start the assistant
+   - `recallr --help` - Show help information
+   - `recallr --status` - Check system status
+   - `recallr --version` - Show version
+   - `recallr --uninstall` - Remove global installation
+
+### Manual Installation (Advanced Users)
+
+If you prefer manual control:
+
+```bash
+# Clone repository
+git clone https://github.com/satwik6941/Recallr.git
+cd Recallr
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Create .env file with your API keys
+# (See Environment Variables section below)
+
+# Install globally (optional)
+pip install -e .
+
+# Run
+python recallr_main.py
+```
+
 ## 🔐 Environment Variables
 
 Recallr requires specific API keys to function. Create a `.env` file in the project root with the following variables in the .env.local file```
 
 ## 📁 Project Structure
 
-```
+```bash
 Recallr/
 ├── 📄 README.md              # This file
 ├── 🚀 recallr_main.py        # Main CLI entry point
