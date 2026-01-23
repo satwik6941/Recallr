@@ -220,6 +220,8 @@ Analyze all the chunks and create a comprehensive system prompt that includes:
 2. The specific domains/subjects these documents relate to
 3. The level of detail and complexity found in the content
 4. Key concepts, processes, or methodologies mentioned
+5. Do not be biased in such a way that you favor one document over others; treat all documents equally.
+6. Create a prompt which gives tells about all the PDFs collectively, rather than focusing pr biasing on individual or similar kind of documents.
 
 Start the system prompt with "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards." 
 

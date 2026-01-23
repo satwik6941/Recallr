@@ -477,11 +477,11 @@ class EnhancedCLI:
         if RICH_AVAILABLE:
             prompt_text = Text()
             prompt_text.append("🤖 ", style="bold blue")
-            prompt_text.append("Recallr", style="bold cyan")
+            prompt_text.append("You", style="bold cyan")
             prompt_text.append(" » ", style="bold white")
             return prompt_text
         else:
-            return "🤖 Recallr » "
+            return "🤖 You » "
 
     def parse_command(self, user_input: str) -> tuple[Optional[str], List[str]]:
         """Parse slash commands from user input"""

@@ -106,78 +106,39 @@ async def analyze_query_routing(query: str) -> Dict[str, Any]:
         conversation_context = ""
         if conversation_history:
             conversation_context = "\n💬 **Recent Conversation Context:**\n"
-            for i, exchange in enumerate(conversation_history, 1):  # Last 3 exchanges for context
+            for i, exchange in enumerate(conversation_history, 1):  
                 conversation_context += f"{i}. User: \"{exchange['user']}\"\n"
                 conversation_context += f"   Assistant: {exchange['assistant'][:200]}{'...' if len(exchange['assistant']) > 200 else ''}\n\n"
 
         routing_prompt = f"""
-You are an intelligent query router for an AI academic assistant that serves students from kindergarten to M-Tech level. Analyze the user's query and determine the best routing strategy.
+You are a query router for an AI academic assistant (K-12 to M-Tech). Analyze the user's query and route it appropriately.
 
 {conversation_context}
 
-Current user query: "{query}"
+Current query: "{query}"
 
-**Available routing options:**
+**ROUTING OPTIONS:**
 
-1. **MATH_SEARCH** - For ALL mathematics-related queries across ALL educational levels:
-   **Elementary (K-5):** Basic arithmetic, counting, shapes, simple addition/subtraction
-   **Middle School (6-8):** Fractions, decimals, basic algebra, geometry, percentages
-   **High School (9-12):** Advanced algebra, trigonometry, calculus, statistics, coordinate geometry
-   **Engineering (B-Tech/M-Tech):** Advanced calculus, differential equations, linear algebra, discrete math, numerical methods, Applied Mathematics, Statistics and Probability, Operations Research
+1. **MATH_SEARCH** - Any question involving numbers, calculations, equations, mathematical concepts, or asking to solve/prove something mathematically or if the query seems like mathematics or advanced mathematics concepts (from basic arithmetic to advanced calculus, statistics, differential equations)
 
-   **Math Keywords to detect:** numbers, equations, solve, calculate, formula, theorem, proof, derivative, integral, matrix, probability, statistics, geometry, algebra, calculus, trigonometry, arithmetic, mathematical, math problem, step-by-step solution
+2. **CODE_SEARCH** - Any question about writing, debugging, or understanding code in any programming language, software development, algorithms, or technical implementation
 
-2. **CODE_SEARCH** - For ALL programming and computer science queries:
-   **Beginner:** Scratch, basic programming concepts, logic building
-   **School Level:** Python basics, simple algorithms, basic coding
-   **Engineering:** Advanced programming, data structures, algorithms, software development, debugging, frameworks, APIs, databases, web development, machine learning code
-   
-   **Programming Keywords to detect:** code, programming, python, java, javascript, C++, algorithm, function, variable, loop, array, debugging, software, app, website, database, API, framework, git, coding
+3. **GENERAL_SEARCH** - Questions about current events, recent news, real-time information, trending topics, or general knowledge that wouldn't be in uploaded study materials (weather, sports scores, product prices, recommendations)
 
-3. **GENERAL_SEARCH** - For general questions, current events, news, and conversational queries:
-   **General Topics:** Current events, news, weather, sports scores, celebrity information, product information, shopping queries, travel information, restaurant recommendations, movie/TV show info
-   **Conversational:** Casual questions, general knowledge not in PDFs, recent developments, real-time information, "what's happening", trending topics
-   **Real-time Info:** Stock prices, weather forecasts, sports results, breaking news, latest updates
-   
-   **General Keywords to detect:** who is, what happened, latest news, current, today, now, recent, trending, weather, score, winner, update, celebrity, movie, restaurant, shopping, price, where to buy, best, recommend
+4. **ACADEMIC_RAG** - Questions about theories, concepts, or content from uploaded course materials, textbooks, lecture notes, or PDFs (science concepts, history, literature, engineering theory)
 
-4. **ACADEMIC_RAG** - For academic subjects based on uploaded PDFs and study materials:
-   **All Levels:** Science (physics, chemistry, biology), social studies, history, geography, literature, languages, engineering subjects (non-coding), research topics, study materials, course content from PDFs
-   **Focus:** Questions about uploaded documents, coursework, textbook content, lecture notes
-   
-   **Academic Keywords to detect:** science, physics, chemistry, biology, history, geography, literature, essay, theory, concept, explain, definition, study, course, subject, textbook, notes, lecture, chapter
+**PRIORITY LOGIC:**
+- If it involves mathematical thinking or computation → MATH_SEARCH
+- If it's about programming or building something with code → CODE_SEARCH
+- If it needs current/real-time information or isn't in PDFs → GENERAL_SEARCH
+- If it's asking about study material content → ACADEMIC_RAG
 
-**SMART ROUTING RULES:**
+**CONTEXT AWARENESS:**
+- Consider the conversation flow (if discussing math and user says "solve this", stay in MATH_SEARCH)
+- Automatically adapts to student level (elementary to graduate)
+- When in doubt between options, choose based on what the user ultimately wants to do with the information
 
-**Priority System:**
-1. **Mathematics FIRST:** If query relates to numbers, mathematical operations, mathematical concepts (basic to advanced), equations, formulas, or asks for calculations/mathematical solutions or doubts/queries → MATH_SEARCH
-2. **Programming SECOND:** If query relates to coding, programming languages, software development, or technical implementation or any kinds of doubts/queries → CODE_SEARCH
-3. **General Knowledge THIRD:** If query asks about current events, news, general information NOT in PDFs, real-time data, conversational questions → GENERAL_SEARCH
-4. **Academic PDFs FOURTH:** For questions about course materials, textbook content, uploaded documents, study notes → ACADEMIC_RAG
-
-**Level-Adaptive Detection:**
-- **Simple Math:** "What is 2+2?" or "How to add fractions?" → MATH_SEARCH
-- **Advanced Math:** "Solve differential equation" or "Find derivative of sin(x)" → MATH_SEARCH
-- **Basic Programming:** "How to print in Python?" → CODE_SEARCH
-- **Advanced Programming:** "Implement binary search tree" → CODE_SEARCH
-- **General Questions:** "Who won Euro 2024?" or "What's the weather today?" → GENERAL_SEARCH
-- **Current Events:** "Latest news about AI" or "Who is trending now?" → GENERAL_SEARCH
-- **Science Concepts (from PDFs):** "What is photosynthesis?" (if in uploaded materials) → ACADEMIC_RAG
-- **Engineering Theory:** "Explain thermodynamics" (if in course PDFs) → ACADEMIC_RAG
-
-**Context Consideration:**
-- If previous conversation was about math and current query uses pronouns ("solve this", "what about it"), likely MATH_SEARCH
-- If previous conversation was about coding and current query references ("debug this", "how to fix it"), likely CODE_SEARCH
-- If asking about real-time or recent information not in PDFs → GENERAL_SEARCH
-- If asking about study materials or course content → ACADEMIC_RAG
-- Consider educational level from context
-
-**Edge Cases:**
-- "Mathematical algorithms" → Focus on implementation = CODE_SEARCH, Focus on theory = MATH_SEARCH
-- "Statistics in Python" → Implementation = CODE_SEARCH, Mathematical concepts = MATH_SEARCH
-- "Physics equations" → MATH_SEARCH (if solving), ACADEMIC_RAG (if explaining concepts)
-- "Latest iPhone price" → GENERAL_SEARCH (real-time info)
-- "Quantum physics from lecture notes" → ACADEMIC_RAG (course material)
+Route naturally based on intent, not just surface words.
 
 Respond with ONLY a JSON object in this exact format:
 {{
@@ -185,6 +146,8 @@ Respond with ONLY a JSON object in this exact format:
     "confidence": 0.85,
     "reasoning": "brief explanation including detected educational level and key indicators"
 }}
+
+IMPORTANT: DO NOT ROUTE THE QUERY, JUST BY FINDING THE KEYWORDS. ANALYSE AND UNDERSTAND THE PROMPT AND THEN ROUTE IT.
 
 Where routing should be either "MATH_SEARCH" or "CODE_SEARCH" or "GENERAL_SEARCH" or "ACADEMIC_RAG".
 """
