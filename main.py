@@ -3,7 +3,7 @@ import os
 import json
 from typing import Dict, Any
 from dotenv import load_dotenv
-from llama_index.llms.google_genai import GoogleGenAI
+from openai import OpenAI
 
 # Import enhanced CLI interface
 try:
@@ -36,8 +36,8 @@ def is_quiet_mode():
     return os.environ.get('RECALLR_QUIET_MODE', '0') == '1'
 
 # Validate API keys
-if not os.getenv("GEMINI_API_KEY"):
-    raise ValueError("GEMINI_API_KEY environment variable is required")
+if not os.getenv("OPENAI_API_KEY"):
+    raise ValueError("OPENAI_API_KEY environment variable is required")
 
 # YouTube API key is optional - will gracefully handle if missing
 youtube_api_key = os.getenv("YOUTUBE_API_KEY")
@@ -152,14 +152,16 @@ IMPORTANT: DO NOT ROUTE THE QUERY, JUST BY FINDING THE KEYWORDS. ANALYSE AND UND
 Where routing should be either "MATH_SEARCH" or "CODE_SEARCH" or "GENERAL_SEARCH" or "ACADEMIC_RAG".
 """
 
-        # Use Gemini orchestrator for routing decision
-        gemini_llm = GoogleGenAI(
-            model="models/gemini-2.0-flash",
-            api_key=os.getenv("GEMINI_API_KEY")
+        # Use OpenAI for routing decision
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        routing_response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": routing_prompt}
+            ]
         )
-        
-        routing_response = await gemini_llm.acomplete(routing_prompt)
-        routing_text = str(routing_response).strip()
+        routing_text = routing_response.choices[0].message.content.strip()
         
         # Parse JSON response
         try:
@@ -210,7 +212,7 @@ async def math_search_answer(query: str) -> str:
         math_add_user_message(query)
         
         # Get responses from both models instead of just one
-        print("🤖 Getting responses from both Mistral and Gemini...")
+        print("🤖 Getting responses from both Mistral and OpenAI...")
         
         responses = math_get_dual_responses(query)
         
@@ -253,7 +255,7 @@ async def math_search_answer(query: str) -> str:
 
 Original user query: "{query}"
 
-Math search assistant response and conversation log (includes both Mistral and Gemini responses):
+Math search assistant response and conversation log (includes both Mistral and OpenAI responses):
 {output_content}
 
 Please provide a final, polished answer that:
@@ -286,18 +288,20 @@ MATHEMATICAL COMMUNICATION STYLE:
 - Build mathematical confidence and understanding
 
 Remember: This is part of an ongoing conversation with a student learning mathematics. Be encouraging, educational, and focus on building deep mathematical understanding rather than just providing answers."""
-        
-        # Use Gemini orchestrator to analyze and refine the response
-        gemini_llm = GoogleGenAI(
-            model="models/gemini-2.0-flash",
-            api_key=os.getenv("GEMINI_API_KEY")
-        )
-        
+
+        # Use OpenAI orchestrator to analyze and refine the response
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
         print("🤖 Orchestrator analyzing both AI responses...")
-        final_response = await gemini_llm.acomplete(analysis_prompt)
-        
-        return str(final_response)
-        
+        final_response_obj = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": analysis_prompt}
+            ]
+        )
+
+        return final_response_obj.choices[0].message.content
+
     except Exception as e:
         return f"Error in math search: {str(e)}. Please try rephrasing your mathematics question."
 
@@ -305,29 +309,29 @@ async def code_search_answer(query: str) -> str:
     """Handle coding-related queries using code_search.py"""
     try:
         print("🔍 Detected coding query - routing to specialized code assistant...")
-        
+
         # Add user message to code search context
         code_add_user_message(query)
-        
+
         # Get responses from both models instead of just one
-        print("🤖 Getting responses from both Mistral and Gemini...")
-        
+        print("🤖 Getting responses from both Mistral and OpenAI...")
+
         responses = code_get_dual_responses(query)
-        
+
         # Add primary response to code search context
         code_add_ai_message(responses["primary"])
-        
+
         # Save both responses to the same file
         print("💾 Saving dual responses to file...")
         code_save_dual_responses_to_file(query, responses)
-        
+
         # Wait a moment for file to be written
         time.sleep(0.5)
-        
+
         # Read the output file to get the complete conversation
         output_content = ""
         output_file_path = "code_results_answer.txt"
-        
+
         # Try to read the file with multiple attempts
         for attempt in range(3):
             try:
@@ -342,18 +346,18 @@ async def code_search_answer(query: str) -> str:
             except Exception as file_error:
                 print(f"⚠️ Attempt {attempt + 1}: Error reading file: {file_error}")
                 time.sleep(1)
-        
+
         # If file reading failed, use direct response
         if not output_content:
             print("⚠️ Could not read output file, using direct response")
             output_content = f"USER: {query}\\n\\nASSISTANT: {responses['primary']}"
-        
+
         # Analyze the code search results with the orchestrator LLM
         analysis_prompt = f"""You are an expert coding assistant who has 20+ years of experience in analyzing and providing coding assistance results.
 
 Original user query: "{query}"
 
-Code search assistant response and conversation log (includes both Mistral and Gemini responses):
+Code search assistant response and conversation log (includes both Mistral and OpenAI responses):
 {output_content}
 
 Please provide a final, polished answer that:
@@ -366,18 +370,20 @@ Please provide a final, polished answer that:
 7. If both responses are available, combine their strengths into a comprehensive answer
 
 Remember: This is part of an ongoing conversation with a student. Be encouraging and educational."""
-        
-        # Use Gemini orchestrator to analyze and refine the response
-        gemini_llm = GoogleGenAI(
-            model="models/gemini-2.0-flash",
-            api_key=os.getenv("GEMINI_API_KEY")
-        )
-        
+
+        # Use OpenAI orchestrator to analyze and refine the response
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
         print("🤖 Orchestrator analyzing both AI responses...")
-        final_response = await gemini_llm.acomplete(analysis_prompt)
-        
-        return str(final_response)
-        
+        final_response_obj = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": analysis_prompt}
+            ]
+        )
+
+        return final_response_obj.choices[0].message.content
+
     except Exception as e:
         return f"Error in code search: {str(e)}. Please try rephrasing your coding question."
 
@@ -673,13 +679,16 @@ Remember:
 Please provide a helpful, human-like response that shows you understand the context of our conversation:
 """
         
-        # Use Gemini for final synthesis
-        gemini_llm = GoogleGenAI(
-            model="models/gemini-2.0-flash",
-            api_key=os.getenv("GEMINI_API_KEY")
+        # Use OpenAI for final synthesis
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        final_response_obj = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": synthesis_prompt}
+            ]
         )
-        
-        final_response = await gemini_llm.acomplete(synthesis_prompt)
+        final_response = final_response_obj.choices[0].message.content
         
         # Debug: Show conversation history size
         print(f"💭 Conversation history: {len(conversation_history)} exchanges stored")

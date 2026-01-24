@@ -9,9 +9,9 @@ from llama_index.core import (
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.retrievers import BaseRetriever
-from llama_index.embeddings.gemini import GeminiEmbedding
+from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.core.node_parser import SimpleNodeParser
-from llama_index.llms.google_genai import GoogleGenAI
+from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.llms.groq import Groq
 import asyncio
 import os
@@ -34,8 +34,8 @@ def is_quiet_mode():
     return os.getenv('RECALLR_QUIET_MODE', '0') == '1'
 
 # Validate API keys
-if not os.getenv("GEMINI_1_API_KEY"):
-    raise ValueError("GEMINI_1_API_KEY environment variable is required")
+if not os.getenv("OPENAI_API_KEY"):
+    raise ValueError("OPENAI_API_KEY environment variable is required")
 if not os.getenv("GROQ_API_KEY"):
     raise ValueError("GROQ_API_KEY environment variable is required")
 
@@ -48,16 +48,16 @@ groq_llm = Groq(
 )
 
 # Settings control global defaults - these will be set when RAG is initialized
-def initialize_gemini_settings():
-    """Initialize Gemini settings for RAG"""
-    Settings.embed_model = GeminiEmbedding(
-        model_name="models/embedding-001",
-        api_key=os.getenv("GEMINI_1_API_KEY")
+def initialize_openai_settings():
+    """Initialize OpenAI settings for RAG"""
+    Settings.embed_model = OpenAIEmbedding(
+        model="text-embedding-3-small",
+        api_key=os.getenv("OPENAI_API_KEY")
     )
 
-    Settings.llm = GoogleGenAI(
-        model="models/gemini-2.0-flash",
-        api_key=os.getenv("GEMINI_1_API_KEY")
+    Settings.llm = LlamaOpenAI(
+        model="gpt-4o-mini",
+        api_key=os.getenv("OPENAI_API_KEY")
     )
 
 # Global variables to store the initialized components
@@ -754,9 +754,9 @@ Return ONLY a JSON object in this exact format:
 async def initialize_rag_pipeline():
     """Initialize the RAG pipeline with hybrid retrieval using AI-optimized chunking"""
     global vector_index, keyword_index, hybrid_query_engine, nodes
-    
-    # Initialize Gemini settings first
-    initialize_gemini_settings()
+
+    # Initialize OpenAI settings first
+    initialize_openai_settings()
     
     # Get optimal chunking strategy
     if not is_quiet_mode():

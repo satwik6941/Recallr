@@ -1,17 +1,18 @@
 import asyncio
-from google import genai
-from google.genai import types
 import os
 import dotenv as env
 from typing import List, Dict, Any
 import json
 import groq as Groq
 from mistralai import Mistral
+from openai import OpenAI
+from tavily import TavilyClient
 
 env.load_dotenv()
 
-# Initialize Gemini client
-client = genai.Client(api_key=os.getenv("GEMINI_2_API_KEY"))
+# Initialize OpenAI and Tavily clients
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+tavily_client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 # Message history for conversation context
 messages_context = []
@@ -70,14 +71,14 @@ def chat_with_mistral(user_prompt: str) -> str:
     try:
         mistral_api_key = os.getenv("MISTRAL_API_KEY")
         if not mistral_api_key:
-            print("Mistral API key not found, falling back to Gemini")
-            return chat_with_gemini(user_prompt)
+            print("Mistral API key not found, falling back to OpenAI")
+            return chat_with_openai(user_prompt)
         
         # Analyze context and build conversation context
         context_analysis = analyze_query_context_dependency(user_prompt)
         conversation_context = get_conversation_context()
         
-        # Build enhanced prompt with context (same logic as Gemini)
+        # Build enhanced prompt with context (same logic as OpenAI)
         if context_analysis['needs_context'] and conversation_context:
             enhanced_prompt = f"""
 {conversation_context}
@@ -95,7 +96,7 @@ Please provide a comprehensive answer that builds on our previous conversation.
             print("🤖 Using Mistral Codestral...")
         except Exception as init_error:
             print(f"Failed to initialize Mistral client: {init_error}")
-            return chat_with_gemini(user_prompt)
+            return chat_with_openai(user_prompt)
         
         # Mistral-specific system instruction (no web search references)
         mistral_system_instruction = f'''
@@ -142,9 +143,7 @@ Remember: This is a continuing conversation, not a standalone question. Focus on
         try:
             response = mistral_client.chat.complete(
                 model="codestral-latest",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=4000
+                messages=messages
             )
             
             if response and response.choices and len(response.choices) > 0:
@@ -154,47 +153,42 @@ Remember: This is a continuing conversation, not a standalone question. Focus on
                 if mistral_response and len(mistral_response.strip()) > 0:
                     return mistral_response
                 else:
-                    print("Empty response from Mistral, falling back to Gemini")
-                    return chat_with_gemini(user_prompt)
+                    print("Empty response from Mistral, falling back to OpenAI")
+                    return chat_with_openai(user_prompt)
             else:
-                print("No valid response from Mistral, falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print("No valid response from Mistral, falling back to OpenAI")
+                return chat_with_openai(user_prompt)
                 
         except Exception as mistral_error:
             error_msg = str(mistral_error).lower()
             
             # Handle specific Mistral error types gracefully - never break the code
             if any(code in error_msg for code in ["400", "401", "402", "403", "404", "429", "500", "502", "503"]):
-                print(f"Mistral API error ({mistral_error}), falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print(f"Mistral API error ({mistral_error}), falling back to OpenAI")
+                return chat_with_openai(user_prompt)
             elif any(issue in error_msg for issue in ["timeout", "connection", "network", "ssl"]):
-                print(f"Mistral connection error, falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print(f"Mistral connection error, falling back to OpenAI")
+                return chat_with_openai(user_prompt)
             elif "rate limit" in error_msg or "quota" in error_msg:
-                print(f"Mistral rate limit exceeded, falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print(f"Mistral rate limit exceeded, falling back to OpenAI")
+                return chat_with_openai(user_prompt)
             else:
-                print(f"Unexpected Mistral error ({mistral_error}), falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print(f"Unexpected Mistral error ({mistral_error}), falling back to OpenAI")
+                return chat_with_openai(user_prompt)
         
     except Exception as general_error:
-        print(f"General error in Mistral setup ({general_error}), falling back to Gemini")
-        return chat_with_gemini(user_prompt)
+        print(f"General error in Mistral setup ({general_error}), falling back to OpenAI")
+        return chat_with_openai(user_prompt)
 
-def chat_with_gemini(user_prompt: str) -> str:
-    """Main chat function using Gemini with conversation context and web search"""
+def chat_with_openai(user_prompt: str) -> str:
+    """Main chat function using OpenAI with conversation context and web search via Tavily"""
     try:
         # Analyze if query needs context
         context_analysis = analyze_query_context_dependency(user_prompt)
-        
+
         # Build the enhanced query with conversation context
         conversation_context = get_conversation_context()
-        
-        # Setup grounding tool for web search
-        grounding_tool = types.Tool(
-            google_search=types.GoogleSearch()
-        )
-        
+
         if context_analysis['needs_context'] and conversation_context:
             enhanced_prompt = f"""
 {conversation_context}
@@ -205,28 +199,38 @@ Please provide a comprehensive answer that builds on our previous conversation.
 """
         else:
             enhanced_prompt = user_prompt
-        
-        # Configure Gemini response with web search
-        config = types.GenerateContentConfig(
-            tools=[grounding_tool],
-            temperature=0.3,
-            top_p=0.8,
-            top_k=40,
-            max_output_tokens=2000,
-            system_instruction=f'''
-You are Gemini, an expert coding assistant with real-time web search capabilities and 20+ years of hands-on experience.
+
+        # Perform Tavily web search for current information
+        search_context = ""
+        try:
+            search_results = tavily_client.search(
+                query=user_prompt,
+                search_depth="basic",
+                max_results=3
+            )
+
+            if search_results and "results" in search_results:
+                search_context = "\n\nWeb Search Results:\n"
+                for idx, result in enumerate(search_results["results"], 1):
+                    search_context += f"{idx}. {result.get('title', 'No title')}\n"
+                    search_context += f"   URL: {result.get('url', 'No URL')}\n"
+                    search_context += f"   Content: {result.get('content', 'No content')[:200]}...\n"
+        except Exception as search_error:
+            print(f"Web search error: {search_error}")
+
+        system_instruction = f'''You are an expert coding assistant with real-time web search capabilities and 20+ years of hands-on experience.
 
 {conversation_context}
 
 CORE CAPABILITIES & INSTRUCTIONS:
 1. **Context Awareness**: If the user's question contains pronouns (it, this, that, they, etc.) or refers to previous topics, understand what they're referring to from our conversation history.
 2. **Start with Examples**: Always begin by explaining the user query with a simple real-life example, then provide the solution.
-3. **Real-Time Web Search**: Actively use web search to find the most current and relevant information from:
+3. **Real-Time Information**: Use the provided web search results to find the most current and relevant information from:
     - Stack Overflow, GitHub, official documentation
-    - GeeksforGeeks, CodeProject, programming blogs  
+    - GeeksforGeeks, CodeProject, programming blogs
     - Community forums and Q&A sites
     - Latest framework updates and version-specific information
-4. **Current Information**: Always verify information is up-to-date using web search, especially for:
+4. **Current Information**: Verify information is up-to-date using the search results, especially for:
     - API changes and deprecations
     - New library versions and features
     - Best practices and security updates
@@ -235,46 +239,41 @@ CORE CAPABILITIES & INSTRUCTIONS:
 6. **Simple Explanations**: Break down complex concepts with examples.
 7. **Conversation Flow**: Reference previous topics when relevant and build naturally on our conversation.
 8. **Encouraging Tone**: Be warm and supportive.
-9. **Source Citations**: When using web search results, mention the source or reference.
+9. **Source Citations**: When using web search results, mention the source or reference with URLs.
 
-SEARCH STRATEGY:
-- Search for current solutions and examples
-- Verify code syntax and compatibility
-- Find community-recommended approaches
-- Check for recent updates or changes
-
-Remember: This is a continuing conversation, not a standalone question. Use your web search capabilities to provide the most accurate and current information.
+Remember: This is a continuing conversation, not a standalone question. Use the provided search results to provide the most accurate and current information.
 '''
+
+        # Get response from OpenAI
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": enhanced_prompt + search_context}
+            ]
         )
-        
-        # Get response from Gemini
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=enhanced_prompt,
-            config=config
-        )
-        
-        if response and response.text:
-            return response.text
+
+        if response and response.choices:
+            return response.choices[0].message.content
         else:
             return "Sorry, I couldn't generate a response. Please try again."
-            
+
     except Exception as e:
         return f"Error: {str(e)}"
 
 def get_dual_responses(user_prompt: str) -> Dict[str, str]:
-    """Get responses from both Mistral and Gemini models"""
+    """Get responses from both Mistral and OpenAI models"""
     responses = {
         "mistral": None,
-        "gemini": None,
+        "openai": None,
         "primary": None  # The response that will be added to conversation context
     }
-    
+
     try:
         # Try Mistral first
         print("🤖 Getting response from Mistral Codestral...")
         mistral_response = chat_with_mistral(user_prompt)
-        
+
         if mistral_response and "Error:" not in mistral_response and len(mistral_response.strip()) > 0:
             responses["mistral"] = mistral_response
             responses["primary"] = mistral_response  # Use Mistral as primary if successful
@@ -283,37 +282,37 @@ def get_dual_responses(user_prompt: str) -> Dict[str, str]:
             print("❌ Mistral response failed or empty")
     except Exception as e:
         print(f"❌ Mistral error: {e}")
-    
+
     try:
-        # Always get Gemini response as well
-        print("🌐 Getting response from Gemini with web search...")
-        gemini_response = chat_with_gemini(user_prompt)
-        
-        if gemini_response and "Error:" not in gemini_response and len(gemini_response.strip()) > 0:
-            responses["gemini"] = gemini_response
-            print("✅ Gemini response obtained")
-            
-            # If Mistral failed, use Gemini as primary
+        # Always get OpenAI response as well
+        print("🌐 Getting response from OpenAI with web search...")
+        openai_response = chat_with_openai(user_prompt)
+
+        if openai_response and "Error:" not in openai_response and len(openai_response.strip()) > 0:
+            responses["openai"] = openai_response
+            print("✅ OpenAI response obtained")
+
+            # If Mistral failed, use OpenAI as primary
             if not responses["primary"]:
-                responses["primary"] = gemini_response
+                responses["primary"] = openai_response
         else:
-            print("❌ Gemini response failed or empty")
+            print("❌ OpenAI response failed or empty")
     except Exception as e:
-        print(f"❌ Gemini error: {e}")
-    
+        print(f"❌ OpenAI error: {e}")
+
     # Fallback if both failed
     if not responses["primary"]:
         responses["primary"] = "Sorry, both AI models are currently unavailable. Please try again later."
-    
+
     return responses
 
 def save_dual_responses_to_file(user_query: str, responses: Dict[str, str]):
-    """Save conversation with both Mistral and Gemini responses"""
+    """Save conversation with both Mistral and OpenAI responses"""
     try:
         output_filename = "code_results_answer.txt"
         with open(output_filename, "w", encoding="utf-8") as f:
             f.write(f"=== DUAL AI CODE SEARCH CONVERSATION LOG ===\n\n")
-            
+
             # Write full conversation history
             exchange_count = 0
             for i in range(0, len(messages_context), 2):
@@ -323,25 +322,25 @@ def save_dual_responses_to_file(user_query: str, responses: Dict[str, str]):
                     f.write(f"USER: {messages_context[i]['content']}\n\n")
                     f.write(f"PRIMARY RESPONSE: {messages_context[i+1]['content']}\n\n")
                     f.write("-" * 60 + "\n\n")
-            
+
             # Add current exchange with both responses
-            if responses.get("mistral") or responses.get("gemini"):
+            if responses.get("mistral") or responses.get("openai"):
                 f.write(f"[Current Exchange - Dual Responses]\n")
                 f.write(f"USER: {user_query}\n\n")
-                
+
                 if responses.get("mistral"):
                     f.write("🤖 MISTRAL RESPONSE:\n")
                     f.write(f"{responses['mistral']}\n\n")
                     f.write("-" * 40 + "\n\n")
-                
-                if responses.get("gemini"):
-                    f.write("🌐 GEMINI RESPONSE:\n")
-                    f.write(f"{responses['gemini']}\n\n")
+
+                if responses.get("openai"):
+                    f.write("🌐 OPENAI RESPONSE:\n")
+                    f.write(f"{responses['openai']}\n\n")
                     f.write("-" * 40 + "\n\n")
-            
+
             f.write("=" * 60 + "\n")
             f.write("END OF CONVERSATION\n")
-        
+
         print(f"✅ Dual responses saved to '{output_filename}'")
     except Exception as e:
         print(f"Error saving dual responses: {e}")
@@ -410,8 +409,7 @@ def print_conversation_summary():
         completion = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=summary_messages,
-            temperature=0.1,
-            max_tokens=2000
+            temperature=0.1
         )
         
         # Display the summary
@@ -454,7 +452,7 @@ def main():
             if context_analysis['needs_context'] and len(messages_context) > 1:
                 print(f"🔍 Detected context dependency: {', '.join(context_analysis['context_indicators_found'])}")
             
-            print("🔄 Getting responses from both Mistral and Gemini...")
+            print("🔄 Getting responses from both Mistral and OpenAI...")
             
             try:
                 # Get responses from both AI models
@@ -472,10 +470,10 @@ def main():
                     print(responses["mistral"])
                     print(f"{'='*60}\n")
                 
-                if responses.get("gemini"):
-                    print("🌐 GEMINI: ")
+                if responses.get("openai"):
+                    print("🌐 OPENAI: ")
                     print(f"{'='*60}")
-                    print(responses["gemini"])
+                    print(responses["openai"])
                     print(f"{'='*60}")
                 
                 # Save dual responses to file

@@ -214,7 +214,8 @@ class StatusCommand(SlashCommand):
             # Environment variables status
             status_text.append("\n🔑 API Keys Status:\n")
             api_keys = {
-                "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
+                "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
+                "TAVILY_API_KEY": os.getenv("TAVILY_API_KEY"),
                 "GROQ_API_KEY": os.getenv("GROQ_API_KEY"),
                 "YOUTUBE_API_KEY": os.getenv("YOUTUBE_API_KEY"),
                 "MISTRAL_API_KEY": os.getenv("MISTRAL_API_KEY"),
@@ -236,7 +237,8 @@ class StatusCommand(SlashCommand):
             print(f"💾 Storage Directory: {'✅ Found' if Path('storage').exists() else '❌ Missing'}")
             print("\n🔑 API Keys Status:")
             api_keys = {
-                "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
+                "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
+                "TAVILY_API_KEY": os.getenv("TAVILY_API_KEY"),
                 "GROQ_API_KEY": os.getenv("GROQ_API_KEY"),
                 "YOUTUBE_API_KEY": os.getenv("YOUTUBE_API_KEY"),
                 "MISTRAL_API_KEY": os.getenv("MISTRAL_API_KEY"),

@@ -1,0 +1,573 @@
+=== DUAL AI CODE SEARCH CONVERSATION LOG ===
+
+[Exchange 1]
+USER: Give me a python code to create an agentic RAG using Llamaindex and openai
+
+PRIMARY RESPONSE: # Creating an Agentic RAG with LlamaIndex and OpenAI
+
+Here's a comprehensive Python code example to create an agentic Retrieval-Augmented Generation (RAG) system using LlamaIndex and OpenAI. This implementation includes document loading, indexing, querying, and agentic capabilities.
+
+```python
+import os
+from typing import List, Dict, Any
+from llama_index.core import (
+    VectorStoreIndex,
+    SimpleDirectoryReader,
+    StorageContext,
+    load_index_from_storage,
+    Settings
+)
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.tools import FunctionTool, QueryEngineTool
+from llama_index.core.agent import ReActAgent
+from llama_index.llms.openai import OpenAI
+from llama_index.embeddings.openai import OpenAIEmbedding
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Set up OpenAI API key
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+
+# Configure LlamaIndex settings
+Settings.llm = OpenAI(model="gpt-4o-mini", temperature=0.1)
+Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small")
+
+class AgenticRAG:
+    def __init__(self, documents_path: str = None, index_path: str = "./storage"):
+        """
+        Initialize the Agentic RAG system.
+
+        Args:
+            documents_path: Path to the directory containing documents to index
+            index_path: Path to store/load the index
+        """
+        self.documents_path = documents_path
+        self.index_path = index_path
+        self.index = None
+        self.agent = None
+
+    def load_documents(self) -> List:
+        """
+        Load documents from the specified directory.
+
+        Returns:
+            List of loaded documents
+        """
+        if not self.documents_path:
+            raise ValueError("Documents path not provided")
+
+        print(f"Loading documents from {self.documents_path}")
+        documents = SimpleDirectoryReader(self.documents_path).load_data()
+        print(f"Loaded {len(documents)} documents")
+        return documents
+
+    def create_index(self, documents: List) -> VectorStoreIndex:
+        """
+        Create a vector index from the loaded documents.
+
+        Args:
+            documents: List of documents to index
+
+        Returns:
+            Created vector index
+        """
+        print("Creating index...")
+        # Split documents into nodes
+        node_parser = SentenceSplitter(chunk_size=1024, chunk_overlap=200)
+        nodes = node_parser.get_nodes_from_documents(documents)
+
+        # Create index
+        self.index = VectorStoreIndex(nodes)
+        print("Index created successfully")
+
+        # Persist index to disk
+        self.index.storage_context.persist(persist_dir=self.index_path)
+        print(f"Index persisted to {self.index_path}")
+
+        return self.index
+
+    def load_index(self) -> VectorStoreIndex:
+        """
+        Load an existing index from storage.
+
+        Returns:
+            Loaded vector index
+        """
+        print(f"Loading index from {self.index_path}")
+        storage_context = StorageContext.from_defaults(persist_dir=self.index_path)
+        self.index = load_index_from_storage(storage_context)
+        print("Index loaded successfully")
+        return self.index
+
+    def setup_agent(self) -> ReActAgent:
+        """
+        Set up the agent with tools for querying the index.
+
+        Returns:
+            Configured ReAct agent
+        """
+        if not self.index:
+            raise ValueError("Index not created or loaded")
+
+        print("Setting up agent...")
+
+        # Create query engine
+        query_engine = self.index.as_query_engine(similarity_top_k=3)
+
+        # Create tools
+        query_engine_tool = QueryEngineTool.from_defaults(
+            query_engine=query_engine,
+            name="document_query_engine",
+            description="Useful for answering questions about the documents in the index"
+        )
+
+        # Create a simple calculator tool
+        def multiply(a: float, b: float) -> float:
+            """Multiply two numbers and returns the product"""
+            return a * b
+
+        multiply_tool = FunctionTool.from_defaults(
+            fn=multiply,
+            name="multiply_numbers",
+            description="Useful for multiplying two numbers"
+        )
+
+        # Create agent
+        self.agent = ReActAgent.from_tools(
+            [query_engine_tool, multiply_tool],
+            llm=Settings.llm,
+            verbose=True
+        )
+
+        print("Agent setup complete")
+        return self.agent
+
+    def query(self, query_str: str) -> str:
+        """
+        Query the agent with a question.
+
+        Args:
+            query_str: The question to ask the agent
+
+        Returns:
+            The agent's response
+        """
+        if not self.agent:
+            raise ValueError("Agent not set up")
+
+        print(f"Querying agent with: {query_str}")
+        response = self.agent.chat(query_str)
+        return str(response)
+
+def main():
+    # Example usage
+    documents_path = "./data"  # Path to your documents
+    index_path = "./storage"  # Where to store the index
+
+    # Initialize the Agentic RAG system
+    rag_system = AgenticRAG(documents_path=documents_path, index_path=index_path)
+
+    try:
+        # Try to load existing index
+        rag_system.load_index()
+    except:
+        # If no index exists, create a new one
+        documents = rag_system.load_documents()
+        rag_system.create_index(documents)
+
+    # Set up the agent
+    rag_system.setup_agent()
+
+    # Example queries
+    queries = [
+        "What is the main topic of the documents?",
+        "Summarize the key points in the documents",
+        "What is 5 multiplied by 7?",
+        "Combine the information from the documents with the multiplication result"
+    ]
+
+    for query in queries:
+        print(f"\nQuery: {query}")
+        response = rag_system.query(query)
+        print(f"Response: {response}")
+
+if __name__ == "__main__":
+    main()
+```
+
+## Explanation
+
+1. **Initialization**: The `AgenticRAG` class initializes with paths for documents and index storage.
+
+2. **Document Loading**: The `load_documents` method reads documents from a specified directory.
+
+3. **Index Creation**: The `create_index` method:
+   - Splits documents into nodes using a sentence splitter
+   - Creates a vector index from these nodes
+   - Persists the index to disk for future use
+
+4. **Index Loading**: The `load_index` method loads an existing index from storage.
+
+5. **Agent Setup**: The `setup_agent` method:
+   - Creates a query engine from the index
+   - Sets up tools for document querying and a simple calculator function
+   - Configures a ReAct agent with these tools
+
+6. **Querying**: The `query` method sends questions to the agent and returns responses.
+
+7. **Main Function**: Demonstrates how to use the system with example queries.
+
+## Requirements
+
+To run this code, you'll need to install the following packages:
+
+```bash
+pip install llama-index openai python-dotenv
+```
+
+## Environment Variables
+
+Create a `.env` file in your project directory with your OpenAI API key:
+
+```
+OPENAI_API_KEY=your_api_key_here
+```
+
+## Key Features
+
+1. **Agentic Capabilities**: The system uses a ReAct agent that can reason and act based on the available tools.
+2. **Document Processing**: Documents are split into manageable chunks for better retrieval.
+3. **Persistence**: The index is saved to disk and can be loaded later.
+4. **Multiple Tools**: The agent has access to both document querying and calculation tools.
+
+This implementation provides a solid foundation for building more complex agentic RAG systems with LlamaIndex and OpenAI.
+
+------------------------------------------------------------
+
+[Current Exchange - Dual Responses]
+USER: Give me a python code to create an agentic RAG using Llamaindex and openai
+
+🤖 MISTRAL RESPONSE:
+# Creating an Agentic RAG with LlamaIndex and OpenAI
+
+Here's a comprehensive Python code example to create an agentic Retrieval-Augmented Generation (RAG) system using LlamaIndex and OpenAI. This implementation includes document loading, indexing, querying, and agentic capabilities.
+
+```python
+import os
+from typing import List, Dict, Any
+from llama_index.core import (
+    VectorStoreIndex,
+    SimpleDirectoryReader,
+    StorageContext,
+    load_index_from_storage,
+    Settings
+)
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.tools import FunctionTool, QueryEngineTool
+from llama_index.core.agent import ReActAgent
+from llama_index.llms.openai import OpenAI
+from llama_index.embeddings.openai import OpenAIEmbedding
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Set up OpenAI API key
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+
+# Configure LlamaIndex settings
+Settings.llm = OpenAI(model="gpt-4o-mini", temperature=0.1)
+Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small")
+
+class AgenticRAG:
+    def __init__(self, documents_path: str = None, index_path: str = "./storage"):
+        """
+        Initialize the Agentic RAG system.
+
+        Args:
+            documents_path: Path to the directory containing documents to index
+            index_path: Path to store/load the index
+        """
+        self.documents_path = documents_path
+        self.index_path = index_path
+        self.index = None
+        self.agent = None
+
+    def load_documents(self) -> List:
+        """
+        Load documents from the specified directory.
+
+        Returns:
+            List of loaded documents
+        """
+        if not self.documents_path:
+            raise ValueError("Documents path not provided")
+
+        print(f"Loading documents from {self.documents_path}")
+        documents = SimpleDirectoryReader(self.documents_path).load_data()
+        print(f"Loaded {len(documents)} documents")
+        return documents
+
+    def create_index(self, documents: List) -> VectorStoreIndex:
+        """
+        Create a vector index from the loaded documents.
+
+        Args:
+            documents: List of documents to index
+
+        Returns:
+            Created vector index
+        """
+        print("Creating index...")
+        # Split documents into nodes
+        node_parser = SentenceSplitter(chunk_size=1024, chunk_overlap=200)
+        nodes = node_parser.get_nodes_from_documents(documents)
+
+        # Create index
+        self.index = VectorStoreIndex(nodes)
+        print("Index created successfully")
+
+        # Persist index to disk
+        self.index.storage_context.persist(persist_dir=self.index_path)
+        print(f"Index persisted to {self.index_path}")
+
+        return self.index
+
+    def load_index(self) -> VectorStoreIndex:
+        """
+        Load an existing index from storage.
+
+        Returns:
+            Loaded vector index
+        """
+        print(f"Loading index from {self.index_path}")
+        storage_context = StorageContext.from_defaults(persist_dir=self.index_path)
+        self.index = load_index_from_storage(storage_context)
+        print("Index loaded successfully")
+        return self.index
+
+    def setup_agent(self) -> ReActAgent:
+        """
+        Set up the agent with tools for querying the index.
+
+        Returns:
+            Configured ReAct agent
+        """
+        if not self.index:
+            raise ValueError("Index not created or loaded")
+
+        print("Setting up agent...")
+
+        # Create query engine
+        query_engine = self.index.as_query_engine(similarity_top_k=3)
+
+        # Create tools
+        query_engine_tool = QueryEngineTool.from_defaults(
+            query_engine=query_engine,
+            name="document_query_engine",
+            description="Useful for answering questions about the documents in the index"
+        )
+
+        # Create a simple calculator tool
+        def multiply(a: float, b: float) -> float:
+            """Multiply two numbers and returns the product"""
+            return a * b
+
+        multiply_tool = FunctionTool.from_defaults(
+            fn=multiply,
+            name="multiply_numbers",
+            description="Useful for multiplying two numbers"
+        )
+
+        # Create agent
+        self.agent = ReActAgent.from_tools(
+            [query_engine_tool, multiply_tool],
+            llm=Settings.llm,
+            verbose=True
+        )
+
+        print("Agent setup complete")
+        return self.agent
+
+    def query(self, query_str: str) -> str:
+        """
+        Query the agent with a question.
+
+        Args:
+            query_str: The question to ask the agent
+
+        Returns:
+            The agent's response
+        """
+        if not self.agent:
+            raise ValueError("Agent not set up")
+
+        print(f"Querying agent with: {query_str}")
+        response = self.agent.chat(query_str)
+        return str(response)
+
+def main():
+    # Example usage
+    documents_path = "./data"  # Path to your documents
+    index_path = "./storage"  # Where to store the index
+
+    # Initialize the Agentic RAG system
+    rag_system = AgenticRAG(documents_path=documents_path, index_path=index_path)
+
+    try:
+        # Try to load existing index
+        rag_system.load_index()
+    except:
+        # If no index exists, create a new one
+        documents = rag_system.load_documents()
+        rag_system.create_index(documents)
+
+    # Set up the agent
+    rag_system.setup_agent()
+
+    # Example queries
+    queries = [
+        "What is the main topic of the documents?",
+        "Summarize the key points in the documents",
+        "What is 5 multiplied by 7?",
+        "Combine the information from the documents with the multiplication result"
+    ]
+
+    for query in queries:
+        print(f"\nQuery: {query}")
+        response = rag_system.query(query)
+        print(f"Response: {response}")
+
+if __name__ == "__main__":
+    main()
+```
+
+## Explanation
+
+1. **Initialization**: The `AgenticRAG` class initializes with paths for documents and index storage.
+
+2. **Document Loading**: The `load_documents` method reads documents from a specified directory.
+
+3. **Index Creation**: The `create_index` method:
+   - Splits documents into nodes using a sentence splitter
+   - Creates a vector index from these nodes
+   - Persists the index to disk for future use
+
+4. **Index Loading**: The `load_index` method loads an existing index from storage.
+
+5. **Agent Setup**: The `setup_agent` method:
+   - Creates a query engine from the index
+   - Sets up tools for document querying and a simple calculator function
+   - Configures a ReAct agent with these tools
+
+6. **Querying**: The `query` method sends questions to the agent and returns responses.
+
+7. **Main Function**: Demonstrates how to use the system with example queries.
+
+## Requirements
+
+To run this code, you'll need to install the following packages:
+
+```bash
+pip install llama-index openai python-dotenv
+```
+
+## Environment Variables
+
+Create a `.env` file in your project directory with your OpenAI API key:
+
+```
+OPENAI_API_KEY=your_api_key_here
+```
+
+## Key Features
+
+1. **Agentic Capabilities**: The system uses a ReAct agent that can reason and act based on the available tools.
+2. **Document Processing**: Documents are split into manageable chunks for better retrieval.
+3. **Persistence**: The index is saved to disk and can be loaded later.
+4. **Multiple Tools**: The agent has access to both document querying and calculation tools.
+
+This implementation provides a solid foundation for building more complex agentic RAG systems with LlamaIndex and OpenAI.
+
+----------------------------------------
+
+🌐 OPENAI RESPONSE:
+Creating an agentic Retrieval-Augmented Generation (RAG) system using LlamaIndex and OpenAI is quite an exciting endeavor! Think of it like building a smart assistant that not only retrieves information but also generates contextually relevant responses.
+
+### Real-Life Example
+Imagine having a virtual assistant that not only fetches information about a topic from the web but also constructs responses or summaries based on that information. This is essentially what an agentic RAG system does.
+
+### How to Create an Agentic RAG with LlamaIndex and OpenAI
+
+Here's a simplified Python code example to get you started with using LlamaIndex to create an agentic RAG that integrates OpenAI’s models.
+
+#### Step 1: Install Required Libraries
+Make sure you have the necessary libraries installed. You can do this using pip:
+
+```bash
+pip install llama-index openai
+```
+
+#### Step 2: Set Up Your API Key
+You will need to provide your OpenAI API key within your environment. You can set this up in your script (not recommended for production) or by setting an environment variable.
+
+```python
+import os
+
+os.environ["OPENAI_API_KEY"] = "your_api_key_here"
+```
+
+#### Step 3: Implementing the Agentic RAG
+
+Here is a basic example of how to set up your agentic RAG:
+
+```python
+from llama_index import SimpleRAG, OpenAI
+
+# Initialize OpenAI model
+openai_model = OpenAI(model="gpt-3.5-turbo")
+
+# Instantiate the RAG model
+rag_model = SimpleRAG(
+    retriever=openai_model,  # Using OpenAI model as a retriever
+    generator=openai_model    # Using OpenAI model for generation
+)
+
+# Function to get response
+def get_agentic_response(query):
+    response = rag_model.retrieve_and_generate(query)
+    return response
+
+# Example usage
+if __name__ == "__main__":
+    query = "What is the significance of the Turing Test in AI?"
+    response = get_agentic_response(query)
+    print("Response from the agentic RAG:", response)
+```
+
+### Breakdown of the Code
+1. **Imports**: The required libraries are imported.
+2. **OpenAI Setup**: OpenAI’s model is instantiated for both retrieval and generation.
+3. **RAG Initialization**: A simple agentic RAG is initialized using the OpenAI model.
+4. **Function Definition**: A function to handle queries and get responses from the RAG.
+5. **Example Usage**: Demonstrating how to use the function with a sample query.
+
+### Key Points to Note
+- Make sure to replace `"your_api_key_here"` with your actual OpenAI API key.
+- You can customize the model parameters as per your needs based on the latest features and API updates found in the [OpenAI documentation](https://platform.openai.com/docs/api-reference/introduction).
+
+### Further Exploration
+If you're interested in more advanced implementations or modifications, consider checking out the blog posts and resources on Agentic RAG available on platforms like Memgraph and GitHub, as highlighted in the web search results:
+
+- [Agentic RAG with Pagerank](https://memgraph.com/blog/agentic-rag-with-pagerank)
+- [LlamaIndex Python Documentation](https://developers.llamaindex.ai/python/framework/understanding/agent/)
+- [GitHub Repository](https://github.com/PatrickAttankurugu/Agentic-RAG-with-Llamaindex)
+
+Feel free to ask if you have questions or need further clarification on any part of this process!
+
+----------------------------------------
+
+============================================================
+END OF CONVERSATION

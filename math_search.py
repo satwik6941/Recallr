@@ -1,6 +1,6 @@
 import asyncio
-from google import genai
-from google.genai import types
+from openai import OpenAI
+from tavily import TavilyClient
 import os
 import dotenv as env
 from typing import List, Dict, Any
@@ -10,8 +10,9 @@ from mistralai import Mistral
 
 env.load_dotenv()
 
-# Initialize Gemini client
-client = genai.Client(api_key=os.getenv("GEMINI_3_API_KEY"))
+# Initialize OpenAI and Tavily clients
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+tavily_client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 # Message history for conversation context
 messages_context = []
@@ -70,14 +71,14 @@ def chat_with_mistral(user_prompt: str) -> str:
     try:
         mistral_api_key = os.getenv("MISTRAL_API_KEY_1")
         if not mistral_api_key:
-            print("Mistral API key not found, falling back to Gemini")
-            return chat_with_gemini(user_prompt)
+            print("Mistral API key not found, falling back to OpenAI")
+            return chat_with_openai(user_prompt)
         
         # Analyze context and build conversation context
         context_analysis = analyze_query_context_dependency(user_prompt)
         conversation_context = get_conversation_context()
         
-        # Build enhanced prompt with context (same logic as Gemini)
+        # Build enhanced prompt with context (same logic as OpenAI)
         if context_analysis['needs_context'] and conversation_context:
             enhanced_prompt = f"""
 {conversation_context}
@@ -95,7 +96,7 @@ Please provide a comprehensive answer that builds on our previous conversation.
             print("🤖 Using Mistral Mathstral...")
         except Exception as init_error:
             print(f"Failed to initialize Mistral client: {init_error}")
-            return chat_with_gemini(user_prompt)
+            return chat_with_openai(user_prompt)
         
         # Mistral-specific system instruction (no web search references)
         mistral_system_instruction = f'''
@@ -197,9 +198,7 @@ Remember: You're teaching a student who wants to truly understand mathematics, n
         try:
             response = mistral_client.chat.complete(
                 model="open-mixtral-8x22b",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=4000
+                messages=messages
             )
             
             if response and response.choices and len(response.choices) > 0:
@@ -209,47 +208,42 @@ Remember: You're teaching a student who wants to truly understand mathematics, n
                 if mistral_response and len(mistral_response.strip()) > 0:
                     return mistral_response
                 else:
-                    print("Empty response from Mistral, falling back to Gemini")
-                    return chat_with_gemini(user_prompt)
+                    print("Empty response from Mistral, falling back to OpenAI")
+                    return chat_with_openai(user_prompt)
             else:
-                print("No valid response from Mistral, falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print("No valid response from Mistral, falling back to OpenAI")
+                return chat_with_openai(user_prompt)
                 
         except Exception as mistral_error:
             error_msg = str(mistral_error).lower()
             
             # Handle specific Mistral error types gracefully - never break the code
             if any(code in error_msg for code in ["400", "401", "402", "403", "404", "429", "500", "502", "503"]):
-                print(f"Mistral API error ({mistral_error}), falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print(f"Mistral API error ({mistral_error}), falling back to OpenAI")
+                return chat_with_openai(user_prompt)
             elif any(issue in error_msg for issue in ["timeout", "connection", "network", "ssl"]):
-                print(f"Mistral connection error, falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print(f"Mistral connection error, falling back to OpenAI")
+                return chat_with_openai(user_prompt)
             elif "rate limit" in error_msg or "quota" in error_msg:
-                print(f"Mistral rate limit exceeded, falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print(f"Mistral rate limit exceeded, falling back to OpenAI")
+                return chat_with_openai(user_prompt)
             else:
-                print(f"Unexpected Mistral error ({mistral_error}), falling back to Gemini")
-                return chat_with_gemini(user_prompt)
+                print(f"Unexpected Mistral error ({mistral_error}), falling back to OpenAI")
+                return chat_with_openai(user_prompt)
         
     except Exception as general_error:
-        print(f"General error in Mistral setup ({general_error}), falling back to Gemini")
-        return chat_with_gemini(user_prompt)
+        print(f"General error in Mistral setup ({general_error}), falling back to OpenAI")
+        return chat_with_openai(user_prompt)
 
-def chat_with_gemini(user_prompt: str) -> str:
-    """Main chat function using Gemini with conversation context and web search"""
+def chat_with_openai(user_prompt: str) -> str:
+    """Main chat function using OpenAI with conversation context and web search via Tavily"""
     try:
         # Analyze if query needs context
         context_analysis = analyze_query_context_dependency(user_prompt)
-        
+
         # Build the enhanced query with conversation context
         conversation_context = get_conversation_context()
-        
-        # Setup grounding tool for web search
-        grounding_tool = types.Tool(
-            google_search=types.GoogleSearch()
-        )
-        
+
         if context_analysis['needs_context'] and conversation_context:
             enhanced_prompt = f"""
 {conversation_context}
@@ -260,16 +254,26 @@ Please provide a comprehensive answer that builds on our previous conversation.
 """
         else:
             enhanced_prompt = user_prompt
-        
-        # Configure Gemini response with web search
-        config = types.GenerateContentConfig(
-            tools=[grounding_tool],
-            temperature=0.3,
-            top_p=0.8,
-            top_k=40,
-            max_output_tokens=2000,
-            system_instruction=f'''
-You are Gemini, a passionate mathematics tutor with real-time web search capabilities and 20+ years of experience making mathematics accessible and exciting for students across ALL mathematical fields. You have many extraordinary teaching methods, publications and awards.
+
+        # Perform Tavily web search for current information
+        search_context = ""
+        try:
+            search_results = tavily_client.search(
+                query=user_prompt,
+                search_depth="basic",
+                max_results=3
+            )
+
+            if search_results and "results" in search_results:
+                search_context = "\n\nWeb Search Results:\n"
+                for idx, result in enumerate(search_results["results"], 1):
+                    search_context += f"{idx}. {result.get('title', 'No title')}\n"
+                    search_context += f"   URL: {result.get('url', 'No URL')}\n"
+                    search_context += f"   Content: {result.get('content', 'No content')[:200]}...\n"
+        except Exception as search_error:
+            print(f"Web search error: {search_error}")
+
+        system_instruction = f'''You are a passionate mathematics tutor with real-time web search capabilities and 20+ years of experience making mathematics accessible and exciting for students across ALL mathematical fields. You have many extraordinary teaching methods, publications and awards.
 
 {conversation_context}
 
@@ -279,13 +283,13 @@ STUDENT-CENTERED TEACHING PHILOSOPHY:
 2. **Real-World First Approach**:
    - ALWAYS start with a concrete, relatable example from daily life
    - Use current events, popular culture, technology students know
-   - Search for trending applications and modern examples
+   - Use the provided web search results for trending applications and modern examples
    - Connect math to their interests (gaming, social media, sports, music)
 
 3. **Concept Mapping & Connections**:
    - Show how current topic builds on previous learning
    - Create "mathematical bridges" between different areas
-   - Use web search to find connections students might not expect
+   - Use web search results to find connections students might not expect
    - Reference our conversation history to build cumulative understanding
 
 4. **Step-by-Step Problem Deconstruction**:
@@ -295,9 +299,9 @@ STUDENT-CENTERED TEACHING PHILOSOPHY:
    - Check understanding before moving to next step
 
 5. **Real-Time Learning Enhancement**:
-   - Search for current, relevant examples and applications
-   - Find interactive tools and visualizations
-   - Look up career connections and salary implications
+   - Use search results for current, relevant examples and applications
+   - Reference interactive tools and visualizations found in search
+   - Include career connections and salary implications from search
    - Discover recent breakthroughs and discoveries
 
 COMPREHENSIVE MATHEMATICAL MASTERY:
@@ -334,51 +338,46 @@ STUDENT-FRIENDLY SOLUTION STRUCTURE:
 1. **Engaging Hook**: "Have you ever wondered how [relevant example] works?"
 2. **Problem Breakdown**: "Let's tackle this step by step..."
 3. **Concept Bridge**: "Remember when we learned [previous topic]? This builds on that..."
-4. **Real-World Context**: Use web search to find current, relevant applications
+4. **Real-World Context**: Use web search results to find current, relevant applications
 5. **Step-by-Step Solution**: Clear explanations with reasoning
 6. **Visual Descriptions**: Describe graphs, patterns, visual representations
 7. **Verification**: "Let's check if this makes sense..."
 8. **Application Examples**: "Here's how professionals use this..."
 9. **Future Connections**: "This prepares you for learning..."
 
-WEB SEARCH STRATEGY FOR STUDENTS:
-- Find current examples and applications
-- Look up career connections and job market data
-- Search for interactive tools and visualizations
-- Discover recent news about mathematical applications
-- Find student-friendly explanations and tutorials
-
 ENCOURAGING COMMUNICATION STYLE:
-- Use emojis and visual language 
+- Use emojis and visual language
 - Celebrate progress and breakthroughs
 - Acknowledge when concepts are challenging
 - Build confidence through step-by-step success
 - Connect learning to student goals and interests
+- Cite sources with URLs when using web search results
 
 Remember: Every mathematical concept has a story and real-world application. Your job is to help students discover these connections, build understanding step by step, and see mathematics as an exciting tool for understanding and changing the world!
 '''
+
+        # Get response from OpenAI
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": enhanced_prompt + search_context}
+            ]
         )
-        
-        # Get response from Gemini
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=enhanced_prompt,
-            config=config
-        )
-        
-        if response and response.text:
-            return response.text
+
+        if response and response.choices:
+            return response.choices[0].message.content
         else:
             return "Sorry, I couldn't generate a response. Please try again."
-            
+
     except Exception as e:
         return f"Error: {str(e)}"
 
 def get_dual_responses(user_prompt: str) -> Dict[str, str]:
-    """Get responses from both Mistral and Gemini models"""
+    """Get responses from both Mistral and OpenAI models"""
     responses = {
         "mistral": None,
-        "gemini": None,
+        "openai": None,
         "primary": None  # The response that will be added to conversation context
     }
     
@@ -397,21 +396,21 @@ def get_dual_responses(user_prompt: str) -> Dict[str, str]:
         print(f"❌ Mistral error: {e}")
     
     try:
-        # Always get Gemini response as well
-        print("🌐 Getting response from Gemini with web search...")
-        gemini_response = chat_with_gemini(user_prompt)
-        
-        if gemini_response and "Error:" not in gemini_response and len(gemini_response.strip()) > 0:
-            responses["gemini"] = gemini_response
-            print("✅ Gemini response obtained")
-            
-            # If Mistral failed, use Gemini as primary
+        # Always get OpenAI response as well
+        print("🌐 Getting response from OpenAI with web search...")
+        openai_response = chat_with_openai(user_prompt)
+
+        if openai_response and "Error:" not in openai_response and len(openai_response.strip()) > 0:
+            responses["openai"] = openai_response
+            print("✅ OpenAI response obtained")
+
+            # If Mistral failed, use OpenAI as primary
             if not responses["primary"]:
-                responses["primary"] = gemini_response
+                responses["primary"] = openai_response
         else:
-            print("❌ Gemini response failed or empty")
+            print("❌ OpenAI response failed or empty")
     except Exception as e:
-        print(f"❌ Gemini error: {e}")
+        print(f"❌ OpenAI error: {e}")
     
     # Fallback if both failed
     if not responses["primary"]:
@@ -420,7 +419,7 @@ def get_dual_responses(user_prompt: str) -> Dict[str, str]:
     return responses
 
 def save_dual_responses_to_file(user_query: str, responses: Dict[str, str]):
-    """Save conversation with both Mistral and Gemini responses"""
+    """Save conversation with both Mistral and OpenAI responses"""
     try:
         output_filename = "math_results_answer.txt"
         with open(output_filename, "w", encoding="utf-8") as f:
@@ -437,7 +436,7 @@ def save_dual_responses_to_file(user_query: str, responses: Dict[str, str]):
                     f.write("-" * 60 + "\n\n")
             
             # Add current exchange with both responses
-            if responses.get("mistral") or responses.get("gemini"):
+            if responses.get("mistral") or responses.get("openai"):
                 f.write(f"[Current Exchange - Dual Responses]\n")
                 f.write(f"USER: {user_query}\n\n")
                 
@@ -446,9 +445,9 @@ def save_dual_responses_to_file(user_query: str, responses: Dict[str, str]):
                     f.write(f"{responses['mistral']}\n\n")
                     f.write("-" * 40 + "\n\n")
                 
-                if responses.get("gemini"):
-                    f.write("🌐 GEMINI RESPONSE:\n")
-                    f.write(f"{responses['gemini']}\n\n")
+                if responses.get("openai"):
+                    f.write("🌐 OPENAI RESPONSE:\n")
+                    f.write(f"{responses['openai']}\n\n")
                     f.write("-" * 40 + "\n\n")
             
             f.write("=" * 60 + "\n")
@@ -522,8 +521,7 @@ def print_conversation_summary():
         completion = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=summary_messages,
-            temperature=0.1,
-            max_tokens=2000
+            temperature=0.1
         )
         
         # Display the summary
@@ -566,7 +564,7 @@ def main():
             if context_analysis['needs_context'] and len(messages_context) > 1:
                 print(f"🔍 Detected context dependency: {', '.join(context_analysis['context_indicators_found'])}")
             
-            print("🔄 Getting responses from both Mistral and Gemini...")
+            print("🔄 Getting responses from both Mistral and OpenAI...")
             
             try:
                 # Get responses from both AI models
@@ -584,10 +582,10 @@ def main():
                     print(responses["mistral"])
                     print(f"{'='*60}\n")
                 
-                if responses.get("gemini"):
-                    print("🌐 GEMINI: ")
+                if responses.get("openai"):
+                    print("🌐 OPENAI: ")
                     print(f"{'='*60}")
-                    print(responses["gemini"])
+                    print(responses["openai"])
                     print(f"{'='*60}")
                 
                 # Save dual responses to file
