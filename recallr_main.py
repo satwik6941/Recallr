@@ -235,18 +235,11 @@ def setup_env_file():
     print("\n🔑 Setting up environment variables...")
     print("Please enter your API keys (press Enter to skip optional ones):\n")
     
-    # Get GEMINI_API_KEY
-    gemini_key = input("GEMINI_API_KEY (required): ").strip()
-    if not gemini_key:
-        print("GEMINI_API_KEY is required for Recallr to work!")
-        return False
-    
     # Get YOUTUBE_API_KEY (optional)
     youtube_key = input("📺 YOUTUBE_API_KEY (optional, for enhanced search): ").strip()
     
     # Create .env file content
     env_content = f"# Recallr Environment Variables\n"
-    env_content += f"GEMINI_API_KEY={gemini_key}\n"
     if youtube_key:
         env_content += f"YOUTUBE_API_KEY={youtube_key}\n"
     else:
@@ -258,8 +251,6 @@ def setup_env_file():
             f.write(env_content)
         print(f"✅ Environment file created at: {env_file}")
         
-        # Load the new environment variables
-        os.environ['GEMINI_API_KEY'] = gemini_key
         if youtube_key:
             os.environ['YOUTUBE_API_KEY'] = youtube_key
             
@@ -319,8 +310,8 @@ def check_environment():
     # Load .env file first
     loaded_vars = load_env_file()
     
-    required_vars = ["GEMINI_API_KEY"]
-    optional_vars = ["YOUTUBE_API_KEY"]
+    required_vars = ["OPENAI_API_KEY", "TAVILY_API_KEY"]
+    optional_vars = ["YOUTUBE_API_KEY", "MISTRAL_API_KEY", "MISTRAL_API_KEY_1", "GROQ_API_KEY"]
     
     missing_required = []
     found_required = []
@@ -348,8 +339,9 @@ def check_environment():
             else:
                 print("\n📝 To set up manually:")
                 print(f"1. Create/edit .env file at: {env_file}")
-                print("2. Add: GEMINI_API_KEY=your_api_key_here")
-                print("3. Optionally add: YOUTUBE_API_KEY=your_youtube_api_key")
+                print("2. Add required keys: OPENAI_API_KEY=your_key_here")
+                print("3. Add required keys: TAVILY_API_KEY=your_key_here")
+                print("4. Optionally add: YOUTUBE_API_KEY, MISTRAL_API_KEY, GROQ_API_KEY")
                 return False
         except KeyboardInterrupt:
             print("\n👋 Setup cancelled.")
@@ -581,8 +573,8 @@ INSTALLATION:
     recallr
 
 SETUP:
-    1. Create a .env file with GEMINI_API_KEY=your_api_key
-    2. Optionally add YOUTUBE_API_KEY for enhanced search
+    1. Create a .env file with OPENAI_API_KEY and TAVILY_API_KEY
+    2. Optionally add YOUTUBE_API_KEY, MISTRAL_API_KEY, GROQ_API_KEY
     3. Run 'python recallr_main.py --install' for global installation
     4. Use 'recallr' command from anywhere!
 
