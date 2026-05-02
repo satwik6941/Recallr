@@ -14,18 +14,17 @@ except ImportError:
     console = None
 
 from hybrid import (
-    search_documents_with_context, 
+    search_documents_with_context,
     analyze_query_context_dependency,
     get_web_search_results,
     get_youtube_search_results
-)    
+)
 
 from code_search import add_user_message as code_add_user_message, add_ai_message as code_add_ai_message, get_dual_responses as code_get_dual_responses, save_dual_responses_to_file as code_save_dual_responses_to_file
 from math_search import add_user_message as math_add_user_message, add_ai_message as math_add_ai_message, get_dual_responses as math_get_dual_responses, save_dual_responses_to_file as math_save_dual_responses_to_file
 from doc_processing import get_system_prompt_with_caching, has_pdf_collection_changed
 from general_search import answer_query_with_google_search as google_search_answer
 import time
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -53,6 +52,19 @@ ACADEMIC_SYSTEM_PROMPT = None
 # Global variable for pipeline mode
 PIPELINE_MODE = "AUTO"  # Options: AUTO, ACADEMIC_RAG, MATH, CODE, GENERAL
 
+# Module-level OpenAI client — created once, reused across all calls
+_openai_client: OpenAI = None
+
+def get_openai_client() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return _openai_client
+
+# Conversation context to maintain chat history
+conversation_history = []
+
+
 def save_conversation_history():
     """Save the entire conversation history to a text file"""
     try:
@@ -61,31 +73,31 @@ def save_conversation_history():
             f.write(f"Session started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Total exchanges: {len(conversation_history)}\n")
             f.write("=" * 50 + "\n\n")
-            
+
             for i, exchange in enumerate(conversation_history, 1):
                 f.write(f"Exchange {i}:\n")
                 f.write(f"Timestamp: {exchange.get('timestamp', 'N/A')}\n")
                 f.write(f"User: {exchange['user']}\n")
                 f.write(f"Assistant: {exchange['assistant']}\n")
                 f.write("-" * 30 + "\n\n")
-        
+
         print(f"💾 Conversation saved to {CONVERSATION_FILE}")
     except Exception as e:
         print(f"⚠️ Error saving conversation: {str(e)}")
+
 
 def load_conversation_history():
     """Load conversation history from file if it exists"""
     global conversation_history
     try:
         if os.path.exists(CONVERSATION_FILE):
-            # For now, we'll start fresh each session
-            # You can implement parsing logic here if needed
             print(f"📁 Found existing conversation file: {CONVERSATION_FILE}")
             return True
         return False
     except Exception as e:
         print(f"⚠️ Error loading conversation: {str(e)}")
         return False
+
 
 def add_to_conversation_history(user_query: str, assistant_response: str):
     """Add an exchange to conversation history and save to file"""
@@ -95,9 +107,8 @@ def add_to_conversation_history(user_query: str, assistant_response: str):
         "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     conversation_history.append(exchange)
-    
-    # Save to file after each exchange
     save_conversation_history()
+
 
 async def analyze_query_routing(query: str) -> Dict[str, Any]:
     """Use orchestrator LLM to analyze query and determine routing strategy"""
@@ -152,10 +163,7 @@ IMPORTANT: DO NOT ROUTE THE QUERY, JUST BY FINDING THE KEYWORDS. ANALYSE AND UND
 Where routing should be either "MATH_SEARCH" or "CODE_SEARCH" or "GENERAL_SEARCH" or "ACADEMIC_RAG".
 """
 
-        # Use OpenAI for routing decision
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-        routing_response = openai_client.chat.completions.create(
+        routing_response = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": routing_prompt}
@@ -289,11 +297,8 @@ MATHEMATICAL COMMUNICATION STYLE:
 
 Remember: This is part of an ongoing conversation with a student learning mathematics. Be encouraging, educational, and focus on building deep mathematical understanding rather than just providing answers."""
 
-        # Use OpenAI orchestrator to analyze and refine the response
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
         print("🤖 Orchestrator analyzing both AI responses...")
-        final_response_obj = openai_client.chat.completions.create(
+        final_response_obj = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": analysis_prompt}
@@ -371,11 +376,8 @@ Please provide a final, polished answer that:
 
 Remember: This is part of an ongoing conversation with a student. Be encouraging and educational."""
 
-        # Use OpenAI orchestrator to analyze and refine the response
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
         print("🤖 Orchestrator analyzing both AI responses...")
-        final_response_obj = openai_client.chat.completions.create(
+        final_response_obj = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": analysis_prompt}
@@ -524,52 +526,6 @@ async def check_and_update_documents():
         print(f"⚠️ Error checking document changes: {e}")
         return False
 
-def save_conversation_history():
-    """Save the entire conversation history to a text file"""
-    try:
-        with open(CONVERSATION_FILE, "w", encoding="utf-8") as f:
-            f.write(f"=== Recallr Conversation History ===\n")
-            f.write(f"Session started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Total exchanges: {len(conversation_history)}\n")
-            f.write("=" * 50 + "\n\n")
-            
-            for i, exchange in enumerate(conversation_history, 1):
-                f.write(f"Exchange {i}:\n")
-                f.write(f"Timestamp: {exchange.get('timestamp', 'N/A')}\n")
-                f.write(f"User: {exchange['user']}\n")
-                f.write(f"Assistant: {exchange['assistant']}\n")
-                f.write("-" * 30 + "\n\n")
-        
-        print(f"💾 Conversation saved to {CONVERSATION_FILE}")
-    except Exception as e:
-        print(f"⚠️ Error saving conversation: {str(e)}")
-
-def load_conversation_history():
-    """Load conversation history from file if it exists"""
-    global conversation_history
-    try:
-        if os.path.exists(CONVERSATION_FILE):
-            # For now, we'll start fresh each session
-            # You can implement parsing logic here if needed
-            print(f"📁 Found existing conversation file: {CONVERSATION_FILE}")
-            return True
-        return False
-    except Exception as e:
-        print(f"⚠️ Error loading conversation: {str(e)}")
-        return False
-
-def add_to_conversation_history(user_query: str, assistant_response: str):
-    """Add an exchange to conversation history and save to file"""
-    exchange = {
-        "user": user_query,
-        "assistant": assistant_response,
-        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    }
-    conversation_history.append(exchange)
-    
-    # Save to file after each exchange
-    save_conversation_history()
-
 async def synthesize_final_answer(query: str, rag_result: str, web_result: str, youtube_result: str = None) -> str:
     """Synthesize final answer from RAG, web search, and YouTube results"""
     global ACADEMIC_SYSTEM_PROMPT
@@ -636,7 +592,7 @@ Please provide a helpful, human-like response that shows you understand the cont
                 for i, exchange in enumerate(conversation_history, 1):
                     conversation_context += f"{i}. Student asked: \"{exchange['user']}\"\n"
                     conversation_context += f"   I responded: {exchange['assistant'][:2000]}{'...' if len(exchange['assistant']) > 2000 else ''}\n\n"
-            
+
             synthesis_prompt = f"""
 {ACADEMIC_SYSTEM_PROMPT if ACADEMIC_SYSTEM_PROMPT else "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."}
 
@@ -652,9 +608,6 @@ I have information from two sources about this question:
 
 🌐 **From Web Search:**
 {web_result}
-
-🎥 **Available YouTube Videos:**
-{youtube_result}
 
 Please respond naturally and conversationally, keeping in mind our previous conversation:
 
@@ -678,11 +631,8 @@ Remember:
 
 Please provide a helpful, human-like response that shows you understand the context of our conversation:
 """
-        
-        # Use OpenAI for final synthesis
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-        final_response_obj = openai_client.chat.completions.create(
+        final_response_obj = get_openai_client().chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "user", "content": synthesis_prompt}
@@ -733,13 +683,6 @@ async def main():
         ACADEMIC_SYSTEM_PROMPT = get_system_prompt_with_caching(data_path)
     except Exception as e:
         ACADEMIC_SYSTEM_PROMPT = "You are an expert AI powered academic assistant with over 20+ years of experience, who has multiple achievements, publications and awards."
-
-    # Initialize RAG pipeline first by making a dummy call to trigger index loading (silent)
-    try:
-        # This will initialize all the indexes (vector, keyword, BM25) upfront
-        await search_documents_with_context("initialization", [])
-    except Exception as e:
-        pass  # Continue with web search and YouTube only
 
     while True:
         try:

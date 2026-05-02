@@ -19,7 +19,6 @@ import requests
 import sys
 from typing import List, Dict, Any
 from dotenv import load_dotenv
-from transformers import AutoTokenizer
 from pathlib import Path
 import fitz
 import re
@@ -359,47 +358,32 @@ Please provide a clear summary highlighting the most relevant videos for learnin
 
 # Legacy function for backward compatibility
 async def analyze_query_context_dependency(query: str, conversation_history: List[Dict] = None) -> Dict[str, Any]:
-    try:
-        # Check for context-dependent words/phrases
-        context_indicators = [
-            'it', 'this', 'that', 'they', 'them', 'these', 'those',
-            'the above', 'previously', 'earlier', 'before', 'as mentioned',
-            'like you said', 'from what you told', 'the one you mentioned',
-            'explain more', 'tell me more', 'elaborate', 'expand on',
-            'what about', 'how about', 'and also', 'additionally'
-        ]
-        
-        needs_context = any(indicator in query.lower() for indicator in context_indicators)
-        
-        # Get recent topics from conversation history
-        recent_topics = []
-        if conversation_history and len(conversation_history) > 0:
-            for exchange in conversation_history:
-                # Extract key topics from recent exchanges
-                topics_prompt = f"""
-Extract the main topics/concepts from this conversation exchange:
-User: {exchange['user']}
-Assistant: {exchange['assistant'][:200]}...
+    """Analyze if the query depends on conversation context (keyword-only, no LLM calls)."""
+    context_indicators = [
+        'it', 'this', 'that', 'they', 'them', 'these', 'those',
+        'the above', 'previously', 'earlier', 'before', 'as mentioned',
+        'like you said', 'from what you told', 'the one you mentioned',
+        'explain more', 'tell me more', 'elaborate', 'expand on',
+        'what about', 'how about', 'and also', 'additionally'
+    ]
 
-List the key topics/concepts (maximum 3):"""
-                
-                topics_response = await groq_llm.acomplete(topics_prompt)
-                topics = str(topics_response).strip().split('\n')
-                recent_topics.extend([topic.strip('- ').strip() for topic in topics if topic.strip()])
-        
-        return {
-            'needs_context': needs_context,
-            'recent_topics': recent_topics,  # Keep top 5 recent topics
-            'context_indicators_found': [indicator for indicator in context_indicators if indicator in query.lower()]
-        }
-        
-    except Exception as e:
-        return {
-            'needs_context': False,
-            'recent_topics': [],
-            'context_indicators_found': [],
-            'error': str(e)
-        }
+    query_lower = query.lower()
+    needs_context = any(indicator in query_lower for indicator in context_indicators)
+    found_indicators = [i for i in context_indicators if i in query_lower]
+
+    # Extract recent topics from stored text without LLM calls
+    recent_topics = []
+    if conversation_history:
+        for exchange in conversation_history[-3:]:  # only last 3 exchanges
+            words = exchange['user'].split()
+            recent_topics.extend([w for w in words if len(w) > 4])
+        recent_topics = list(dict.fromkeys(recent_topics))[:10]  # dedupe, cap at 10
+
+    return {
+        'needs_context': needs_context,
+        'recent_topics': recent_topics,
+        'context_indicators_found': found_indicators,
+    }
 
 def google_search(query: str) -> str:
     """Search the web using Google Custom Search API
@@ -654,7 +638,8 @@ def tokeniser():
         text = re.sub(r'[^\w\s]', '', text)
         return text.split() 
 
-    # Initialize tokenizer
+    # Lazy import — transformers is large and slow to import at module level
+    from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     token_dict = {}
     

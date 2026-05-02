@@ -98,13 +98,10 @@ def display_ascii_art():
         "    🤖 Your AI-Powered Learning Assistant 🤖"
     ]
     
-    # Animate ASCII art line by line
     for line in ascii_lines:
         print(line)
-        time.sleep(0.1)
-    
+
     print()
-    time.sleep(0.5)
 
 def get_recallr_path():
     """Get the path where Recallr source files are located"""
@@ -130,8 +127,7 @@ def get_recallr_path():
     # Fallback: look for main.py in common locations
     possible_paths = [
         Path(__file__).parent,  # Same directory as CLI script
-        Path.cwd(),  # Current working directory
-        Path.home() / "Documents" / "My works and PPTs" / "Recallr",  # Default location
+        Path.cwd(),             # Current working directory
     ]
     
     for path in possible_paths:
@@ -141,65 +137,70 @@ def get_recallr_path():
     # If not found, use the directory where this CLI script is located
     return Path(__file__).parent
 
+def _dep_stamp_path() -> Path:
+    return get_recallr_path() / ".deps_ok"
+
 def check_dependencies():
-    """Check if all required dependencies are installed with animated progress"""
-    loader = AnimatedLoader("Scanning dependencies")
-    loader.start()
-    
+    """Check dependencies. Uses a stamp file so the full scan only runs once after install."""
     recallr_path = get_recallr_path()
     requirements_file = recallr_path / "requirements.txt"
-    
+    stamp = _dep_stamp_path()
+
     if not requirements_file.exists():
-        loader.stop("❌", "Requirements file not found")
+        print("❌ Requirements file not found")
         return False
-    
-    time.sleep(1)  # Simulate scanning time
-    loader.stop("📦", "Dependencies scanned")
-    
-    # Read requirements
+
+    # Re-check requirements mtime against the stamp — only scan when something changed
+    req_mtime = requirements_file.stat().st_mtime
+    if stamp.exists():
+        try:
+            cached_mtime = float(stamp.read_text().strip())
+            if cached_mtime >= req_mtime:
+                print("✅ Dependencies OK (cached)")
+                return True
+        except (ValueError, OSError):
+            pass
+
+    # Full scan
+    loader = AnimatedLoader("Verifying dependencies")
+    loader.start()
+
+    requirements = []
     with open(requirements_file, 'r') as f:
-        requirements = []
         for line in f:
             line = line.strip()
-            if line and not line.startswith('#'):
-                # Handle different requirement formats
-                if '>=' in line:
-                    package = line.split('>=')[0].strip()
-                    version_req = line.split('>=')[1].strip() if len(line.split('>=')) > 1 else None
-                elif '==' in line:
-                    package = line.split('==')[0].strip()
-                    version_req = line.split('==')[1].strip() if len(line.split('==')) > 1 else None
-                elif '[' in line:
-                    package = line.split('[')[0].strip()
-                    version_req = None
-                else:
-                    package = line
-                    version_req = None
-                requirements.append((package, version_req))
-    
-    missing_packages = []
-    installed_packages = []
-    
-    # Silent package checking with progress
-    loader = AnimatedLoader("Verifying package dependencies")
-    loader.start()
-    
-    for package, version_req in requirements:
+            if not line or line.startswith('#'):
+                continue
+            pkg = line.split('>=')[0].split('==')[0].split('[')[0].strip()
+            if pkg:
+                requirements.append(pkg)
+
+    missing = []
+    for pkg in requirements:
         try:
-            dist = importlib.metadata.version(package)
-            installed_packages.append(f"{package}=={dist}")
+            importlib.metadata.version(pkg)
         except importlib.metadata.PackageNotFoundError:
-            missing_packages.append(package)
-    
-    time.sleep(1.5)  # Show progress animation
-    
-    if missing_packages:
-        loader.stop("❌", f"Missing {len(missing_packages)} dependencies")
-        print(f"📊 Status: {len(installed_packages)} installed, {len(missing_packages)} missing")
+            missing.append(pkg)
+
+    if missing:
+        loader.stop("❌", f"Missing {len(missing)} dependencies")
+        print(f"   Missing: {', '.join(missing)}")
         return False
-    else:
-        loader.stop("✅", f"All {len(installed_packages)} dependencies verified")
-        return True
+
+    loader.stop("✅", f"All {len(requirements)} dependencies verified")
+    # Write stamp so next launch skips the scan
+    try:
+        stamp.write_text(str(req_mtime))
+    except OSError:
+        pass
+    return True
+
+
+def invalidate_dep_cache():
+    """Remove the dependency stamp so the next launch re-scans."""
+    stamp = _dep_stamp_path()
+    if stamp.exists():
+        stamp.unlink()
 
 def install_dependencies():
     """Install missing dependencies with animated progress"""
@@ -214,11 +215,10 @@ def install_dependencies():
         result = subprocess.run([
             sys.executable, "-m", "pip", "install", "-r", str(requirements_file)
         ], capture_output=True, text=True)
-        
-        time.sleep(2)  # Let animation run for effect
-        
+
         if result.returncode == 0:
             loader.stop("🎉", "All dependencies installed successfully!")
+            invalidate_dep_cache()
             return True
         else:
             loader.stop("❌", "Failed to install dependencies")
@@ -231,29 +231,40 @@ def setup_env_file():
     """Create or update .env file with user input"""
     recallr_path = get_recallr_path()
     env_file = recallr_path / ".env"
-    
+
     print("\n🔑 Setting up environment variables...")
-    print("Please enter your API keys (press Enter to skip optional ones):\n")
-    
-    # Get YOUTUBE_API_KEY (optional)
-    youtube_key = input("📺 YOUTUBE_API_KEY (optional, for enhanced search): ").strip()
-    
-    # Create .env file content
-    env_content = f"# Recallr Environment Variables\n"
-    if youtube_key:
-        env_content += f"YOUTUBE_API_KEY={youtube_key}\n"
-    else:
-        env_content += f"# YOUTUBE_API_KEY=your_youtube_api_key_here\n"
-    
-    # Write to .env file
+    print("Please enter your API keys (required keys must be filled):\n")
+
+    openai_key = input("🤖 OPENAI_API_KEY (required): ").strip()
+    tavily_key = input("🔍 TAVILY_API_KEY (required): ").strip()
+    groq_key = input("⚡ GROQ_API_KEY (required): ").strip()
+    youtube_key = input("📺 YOUTUBE_API_KEY (optional, for YouTube search): ").strip()
+    mistral_key = input("🧠 MISTRAL_API_KEY (optional, for enhanced code/math): ").strip()
+
+    if not openai_key or not tavily_key or not groq_key:
+        print("❌ OPENAI_API_KEY, TAVILY_API_KEY, and GROQ_API_KEY are all required.")
+        return False
+
+    env_content = "# Recallr Environment Variables\n"
+    env_content += f"OPENAI_API_KEY={openai_key}\n"
+    env_content += f"TAVILY_API_KEY={tavily_key}\n"
+    env_content += f"GROQ_API_KEY={groq_key}\n"
+    env_content += f"YOUTUBE_API_KEY={youtube_key}\n" if youtube_key else "# YOUTUBE_API_KEY=your_youtube_api_key_here\n"
+    env_content += f"MISTRAL_API_KEY={mistral_key}\n" if mistral_key else "# MISTRAL_API_KEY=your_mistral_api_key_here\n"
+
     try:
         with open(env_file, 'w') as f:
             f.write(env_content)
         print(f"✅ Environment file created at: {env_file}")
-        
+
+        for key, val in [("OPENAI_API_KEY", openai_key), ("TAVILY_API_KEY", tavily_key),
+                         ("GROQ_API_KEY", groq_key)]:
+            os.environ[key] = val
         if youtube_key:
             os.environ['YOUTUBE_API_KEY'] = youtube_key
-            
+        if mistral_key:
+            os.environ['MISTRAL_API_KEY'] = mistral_key
+
         return True
     except Exception as e:
         print(f"❌ Failed to create .env file: {e}")
@@ -302,16 +313,15 @@ def check_environment():
     """Check if required environment variables are set with animation"""
     loader = AnimatedLoader("Validating API configuration")
     loader.start()
-    time.sleep(0.8)  # Simulate scanning
-    
+
     recallr_path = get_recallr_path()
     env_file = recallr_path / ".env"
     
     # Load .env file first
     loaded_vars = load_env_file()
     
-    required_vars = ["OPENAI_API_KEY", "TAVILY_API_KEY"]
-    optional_vars = ["YOUTUBE_API_KEY", "MISTRAL_API_KEY", "MISTRAL_API_KEY_1", "GROQ_API_KEY"]
+    required_vars = ["OPENAI_API_KEY", "TAVILY_API_KEY", "GROQ_API_KEY"]
+    optional_vars = ["YOUTUBE_API_KEY", "MISTRAL_API_KEY", "MISTRAL_API_KEY_1"]
     
     missing_required = []
     found_required = []
@@ -341,7 +351,8 @@ def check_environment():
                 print(f"1. Create/edit .env file at: {env_file}")
                 print("2. Add required keys: OPENAI_API_KEY=your_key_here")
                 print("3. Add required keys: TAVILY_API_KEY=your_key_here")
-                print("4. Optionally add: YOUTUBE_API_KEY, MISTRAL_API_KEY, GROQ_API_KEY")
+                print("4. Add required keys: GROQ_API_KEY=your_key_here")
+                print("5. Optionally add: YOUTUBE_API_KEY, MISTRAL_API_KEY")
                 return False
         except KeyboardInterrupt:
             print("\n👋 Setup cancelled.")
@@ -370,57 +381,12 @@ def initialize_application():
         # Set environment variable to indicate CLI mode
         os.environ['RECALLR_SOURCE_PATH'] = str(recallr_path)
 
-        # Try to import enhanced CLI first
-        enhanced_cli_available = False
-        try:
-            from cli_interface import get_cli, console
-            enhanced_cli_available = True
-            print("✅ Enhanced CLI interface loaded")
-        except ImportError:
-            print("⚠️  Enhanced CLI not available, using basic interface")
-
-        # Loading main module animation
+        # Import main module (suppress noisy library output)
         loader_main = AnimatedLoader("Loading core modules")
         loader_main.start()
-        time.sleep(1.0)
-
-        # Import main module (suppress stdout temporarily)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             import main
         loader_main.stop("📦", "Core modules loaded")
-
-        # PDF Processing animation
-        loader_pdf = AnimatedLoader("Processing PDFs and academic documents")
-        loader_pdf.start()
-        time.sleep(2.0)
-        loader_pdf.stop("📄", "PDFs processed successfully")
-
-        # AI Chunking Strategy animation
-        loader_chunk = AnimatedLoader("Preparing AI-optimized chunking strategy")
-        loader_chunk.start()
-        time.sleep(1.8)
-        loader_chunk.stop("🧠", "Chunking strategy optimized")
-
-        # Vector store initialization animation
-        loader_vector = AnimatedLoader("Building search indexes")
-        loader_vector.start()
-        time.sleep(2.0)
-        loader_vector.stop("🔍", "Search indexes ready")
-
-        # Knowledge base initialization animation
-        loader_kb = AnimatedLoader("Initializing academic knowledge base")
-        loader_kb.start()
-        time.sleep(1.5)
-        loader_kb.stop("📚", "Knowledge base ready")
-
-        # Final startup animation with completion message
-        loader_final = AnimatedLoader("All initialization completed")
-        loader_final.start()
-        time.sleep(1.2)
-        loader_final.stop("🎉", "All initialization completed successfully")
-
-        # Final startup animation
-        animated_progress_bar("🚀 Launching Recallr AI Assistant", 2.5, 30)
 
         # Set quiet mode for cleaner output
         os.environ['RECALLR_QUIET_MODE'] = '1'
@@ -480,9 +446,7 @@ def install_globally():
         result = subprocess.run([
             sys.executable, "-m", "pip", "install", "-e", str(recallr_path)
         ], capture_output=True, text=True)
-        
-        time.sleep(2)  # Let animation run
-        
+
         if result.returncode == 0:
             loader.stop("🎉", "Recallr installed globally!")
             
@@ -517,9 +481,7 @@ def uninstall_globally():
         result = subprocess.run([
             sys.executable, "-m", "pip", "uninstall", "recallr", "-y"
         ], capture_output=True, text=True)
-        
-        time.sleep(1)
-        
+
         if result.returncode == 0:
             loader.stop("✅", "Recallr uninstalled successfully")
             print("\n✅ Recallr has been removed from global installation.")
@@ -549,34 +511,31 @@ OPTIONS:
     --status          Check system status (dependencies, environment)
     --install         Install Recallr globally (run 'recallr' from anywhere)
     --uninstall       Remove global installation
+    --check-deps      Force a full dependency re-scan (clears cached result)
 
 DESCRIPTION:
     Recallr is an AI-powered learning assistant that helps with:
-    • Document processing and search
+    • Document processing and search (place PDFs in the data/ folder)
     • Mathematical problem solving
     • Code help and programming assistance
     • YouTube and web search integration
     • Interactive chat interface with slash commands
 
 INTERACTIVE COMMANDS:
+    /mode [name]   - Switch pipeline (AUTO, ACADEMIC_RAG, MATH, CODE, GENERAL)
     /summary, /s   - Generate conversation summary
     /clear, /c     - Clear conversation history
     /help, /h      - Show available commands
     /status        - Show system status
     /exit, /quit   - Exit the application
 
-INSTALLATION:
-    # First time setup - Install globally
-    python recallr_main.py --install
-    
-    # Then use from anywhere
-    recallr
-
 SETUP:
-    1. Create a .env file with OPENAI_API_KEY and TAVILY_API_KEY
-    2. Optionally add YOUTUBE_API_KEY, MISTRAL_API_KEY, GROQ_API_KEY
-    3. Run 'python recallr_main.py --install' for global installation
-    4. Use 'recallr' command from anywhere!
+    Required keys: OPENAI_API_KEY, TAVILY_API_KEY, GROQ_API_KEY
+    Optional keys: YOUTUBE_API_KEY, MISTRAL_API_KEY
+
+    1. Run 'recallr' — it will prompt you to enter keys and create .env
+    2. Place your PDF documents in the data/ folder
+    3. Ask questions — AUTO mode routes to the best pipeline automatically
 
 For more information, visit: https://github.com/satwik6941/Recallr
 """)
@@ -713,67 +672,55 @@ def main():
         elif arg == '--uninstall':
             success = uninstall_globally()
             sys.exit(0 if success else 1)
+        elif arg == '--check-deps':
+            invalidate_dep_cache()
+            success = check_dependencies()
+            sys.exit(0 if success else 1)
         else:
             print(f"Unknown option: {sys.argv[1]}")
             print("Use --help for usage information")
             sys.exit(1)
     
     try:
-        # Animated startup sequence
-        typewriter_effect("🚀 Welcome to Recallr!", 0.05)
-        time.sleep(0.5)
-        
-        # Step 1: Environment Check
+        print("🚀 Welcome to Recallr!")
+
+        # Step 1: Python environment check
         loader1 = AnimatedLoader("Verifying system requirements")
         loader1.start()
-        time.sleep(1.2)
         python_ok = check_python_environment()
         if not python_ok:
             loader1.stop("❌", "Python environment incompatible")
             sys.exit(1)
         loader1.stop("✅", "System requirements met")
-        
-        # Step 2: File System Check  
+
+        # Step 2: File system check
         loader2 = AnimatedLoader("Scanning installation files")
         loader2.start()
-        time.sleep(1.0)
         files_ok = check_system_files()
         if not files_ok:
             loader2.stop("❌", "Critical files missing")
             sys.exit(1)
         loader2.stop("✅", "Installation verified")
-        
+
         # Step 3: Dependencies
         if not check_dependencies():
             if not install_dependencies():
                 print("\n❌ Dependency installation failed")
                 sys.exit(1)
-        
-        # Step 4: Storage
+
+        # Step 4: Disk space
         loader4 = AnimatedLoader("Checking available storage")
         loader4.start()
-        time.sleep(0.6)
         disk_ok = check_disk_space()
         loader4.stop("✅" if disk_ok else "⚠️", "Storage validated")
-        
-        # Step 5: Environment Variables
+
+        # Step 5: Environment variables / API keys
         if not check_environment():
             print("\n❌ Environment setup cancelled")
             sys.exit(1)
-        
-        # Show ASCII art with animation
+
+        # Show ASCII art and launch
         display_ascii_art()
-
-        # Display enhanced CLI info
-        print("\n✨ Enhanced CLI Features:")
-        print("   • Beautiful interface with Rich formatting")
-        print("   • Interactive slash commands (/help, /summary, /clear, etc.)")
-        print("   • Real-time progress indicators")
-        print("   • Improved error handling")
-        print("   • Better visual feedback")
-        print("\n🚀 Starting enhanced Recallr experience...")
-
-        # Initialize and start the application
         initialize_application()
         
     except KeyboardInterrupt:
